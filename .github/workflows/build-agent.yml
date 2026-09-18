@@ -7,6 +7,9 @@ on:
       - "v*"
       - "agent-v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -59,3 +62,44 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/NexusMindAgent-macos.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Agent artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-input
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          (cd release-input/NexusMindAgent-windows && zip -9 ../../release-assets/NexusMindAgent-Windows.zip NexusMindAgent.exe)
+          cp release-input/NexusMindAgent-macos/NexusMindAgent-macos.zip release-assets/NexusMindAgent-macOS.zip
+
+          chmod +x release-input/NexusMindAgent-linux/NexusMindAgent
+          tar -C release-input/NexusMindAgent-linux -czf release-assets/NexusMindAgent-Linux.tar.gz NexusMindAgent
+
+          (cd release-assets && sha256sum NexusMindAgent-Windows.zip NexusMindAgent-macOS.zip NexusMindAgent-Linux.tar.gz > SHA256SUMS.txt)
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          TITLE="NexusMind ${TAG#v}"
+          NOTES=$'NexusMind '"${TAG#v}"$'\n\nAgent packages:\n- Windows\n- macOS\n- Linux\n\nCloudflare / Local / Docker deployment support is included in this release.'
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG"               release-assets/*               --title "$TITLE"               --notes "$NOTES"               --verify-tag
+          fi
