@@ -1,38 +1,42 @@
-﻿# NexusMind
+# NexusMind
 
-> 本地优先、自生长的工程知识系统：从 Git 工作活动、资料、知识编译和周复盘中持续形成可复用知识。
+> A local-first, self-growing engineering knowledge system powered by Git activity, reference ingestion, knowledge compilation, and weekly review.
 
-[English](README_EN.md)
-## 核心能力
+[中文](README_CN.md)
+## What NexusMind Does
 
-- **Git 工作流自动采集**：仅采集用户在 Web 管理台明确选择的文件夹。
-- **多仓库支持**：可多次添加多个目录；目录本身是 Git 仓库时直接采集，也可扫描其直接 Git 子目录。
-- **工作日志自动生长**：commit、branch、Tag、未提交状态自动进入 Daily Log。
-- **周复盘提炼**：按 Conventional Commit、仓库、Release/Tag、知识编译结果生成工作周报。
-- **资料入库**：支持 Markdown、TXT、PDF、DOCX。
-- **知识编译**：Raw 资料增量编译为可复用的 Domain 知识卡片。
-- **知识搜索**：全文搜索、Wikilink、Backlinks、知识图谱与 Canvas 浏览。
-- **治理能力**：死链、孤岛、索引与 OCC 并发保护。
-## 仓库与本地数据边界
+NexusMind turns real engineering activity into reusable local knowledge.
 
-公开仓库只保存**可运行的项目代码和产品文档**。以下内容默认不会提交：
+- **Configured Git collection**: only folders explicitly selected by the user are collected.
+- **Multiple repositories**: add folders repeatedly; a selected folder can be a Git repository itself or a parent containing direct Git children.
+- **Automatic work logs**: commits, branches, tags, and working-tree state are captured into Daily Logs.
+- **Weekly engineering review**: Conventional Commits, repository activity, releases, and compiled knowledge are summarized into a readable work report.
+- **Reference ingestion**: Markdown, TXT, PDF, and DOCX.
+- **Knowledge compilation**: source material is incrementally compiled into reusable Domain notes.
+- **Knowledge navigation**: search, Wikilinks, backlinks, graph visualization, and Canvas browsing.
+- **Governance**: broken links, orphan notes, indexes, and optimistic concurrency control.
 
-- `vault/`：你的本地知识、日志、上传资料和生成内容。
-- `workflow-config.json`：你的本机 Git 采集目录配置。
-- `docs/`：本地设计过程、走查、草稿等内部文档。
-- `.env*`、缓存、构建产物和日志。
+## Repository vs. Local Data
 
-因此新克隆的仓库是一个**空白 NexusMind 实例**，不会携带作者的业务数据或个人知识库。
+The GitHub repository intentionally contains only runnable product code and public product documentation.
 
-## 快速开始
+The following are local-only and ignored by Git:
 
-### 1. 环境要求
+- `vault/`: personal knowledge, logs, uploaded files, and generated notes.
+- `workflow-config.json`: local Git collection targets.
+- `docs/`: internal design notes and local working documents.
+- environment files, caches, logs, and build output.
+
+A fresh clone therefore starts as a **blank NexusMind instance** with no private knowledge or author-specific business data.
+## Quick Start
+
+### Requirements
 
 - Python 3.10+
 - Git
-- Windows / macOS / Linux
+- Windows, macOS, or Linux
 
-### 2. 安装
+### Install
 
 ```bash
 git clone https://github.com/programmerguohuajing/nexus-mind.git
@@ -44,57 +48,56 @@ Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -e .
+pip install -e ".[local]"
 ```
 
 macOS / Linux:
 
 ```bash
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[local]"
 ```
-### 3. 启动
+
+### Run
 
 ```bash
 python scripts/vault_service.py
 ```
 
-默认地址：
+Open:
 
-- Web 管理台: `http://127.0.0.1:8301/`
+- Web console: `http://127.0.0.1:8301/`
 - OpenAPI / Swagger: `http://127.0.0.1:8301/docs`
 
-首次运行时没有本地知识数据是正常的。
+An empty knowledge base on first launch is expected.
+### Configure Git Collection
 
-### 4. 配置 Git 采集范围
+Open:
 
-进入：
+`Workflow → Collection Scope → Add Folder`
 
-`工作流 → 采集范围配置 → 添加文件夹`
+The built-in folder picker supports:
 
-目录选择器支持：
+- local disk browsing,
+- multiple folder selection,
+- repeated additions,
+- duplicate prevention,
+- removing individual folders,
+- persistent configuration after saving.
 
-- 浏览本机磁盘和目录。
-- 一次选择多个文件夹。
-- 多次打开选择器继续追加。
-- 自动去重。
-- 主列表单独删除目录。
-- 保存后定时同步。
+NexusMind does **not** scan any folder by default.
 
-NexusMind **不会默认扫描任何目录**。
+### Use an External Vault
 
-### 5. 使用空白 Vault
+The default local Vault is `./vault`, which is excluded from Git.
 
-默认 Vault 路径是项目根目录下的 `vault/`，该目录属于本地数据，不进入 Git。
-
-也可以指定外部 Vault：
-
-Windows:
+Windows PowerShell:
 
 ```powershell
 $env:NEXUSMIND_VAULT_ROOT="D:\Knowledge\NexusMind"
 python scripts\vault_service.py
 ```
+
 macOS / Linux:
 
 ```bash
@@ -102,35 +105,208 @@ export NEXUSMIND_VAULT_ROOT="$HOME/Knowledge/NexusMind"
 python scripts/vault_service.py
 ```
 
-## 常用配置
+## Configuration
 
-| 环境变量 | 默认值 | 说明 |
+| Variable | Default | Description |
 | --- | --- | --- |
-| `NEXUSMIND_HOST` | `127.0.0.1` | 服务监听地址 |
-| `NEXUSMIND_PORT` | `8301` | Web/API 端口 |
-| `NEXUSMIND_VAULT_ROOT` | `./vault` | 本地知识库路径 |
-| `NEXUSMIND_GIT_SYNC_INTERVAL` | `300` | Git 自动同步周期，秒；最小 60 |
-
-## 项目结构
+| `NEXUSMIND_HOST` | `127.0.0.1` | Bind host |
+| `NEXUSMIND_PORT` | `8301` | Web/API port |
+| `NEXUSMIND_VAULT_ROOT` | `./vault` | Local knowledge directory |
+| `NEXUSMIND_GIT_SYNC_INTERVAL` | `300` | Git sync interval in seconds, minimum 60 |
+## Project Layout
 
 ```text
 nexus-mind/
-├─ src/nexusmind/        # 后端核心、API、CLI、Web 静态前端
-├─ scripts/              # 服务启动与维护脚本
-├─ tests/                # 自动化测试
-├─ README.md             # 中英文项目说明
-├─ USER_MANUAL.md        # 中英文用户手册
-├─ pyproject.toml
-└─ requirements.txt
+├─ src/nexusmind/        # Core backend, API, CLI, and Web UI
+├─ scripts/              # Service and maintenance scripts
+├─ tests/                # Automated tests
+├─ README.md             # English project overview (default)
+├─ README_CN.md          # 中文项目说明
+├─ USER_MANUAL.md        # English user manual (default)
+├─ USER_MANUAL_CN.md     # 中文用户手册
+└─ pyproject.toml
 ```
 
-本地运行后可能出现 `vault/` 和 `workflow-config.json`，它们被 Git 忽略。
+Local runtime data such as `vault/` and `workflow-config.json` is intentionally excluded from source control.
 
-## 测试
+## Deployment Modes
+
+### Local
+
+Local mode provides the complete feature set: local folder browsing, Git Log/Status collection, PDF/DOCX extraction, and a filesystem Vault.
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[local]"
+python scripts/vault_service.py
+```
+
+### Docker
+
+```bash
+docker compose up -d --build
+```
+
+The `nexusmind-data` volume persists `/data`. To collect Git repositories from Docker, mount a host source directory such as `D:/codex:/workspaces:ro`, then select paths under `/workspaces` in the Web console.
+
+### Cloudflare Workers
+
+Cloud mode uses **Python Workers + FastAPI + D1 + R2**. A Worker does not browse your computer or execute local `git`; the Local Agent collects complete Git history and pushes structured events to the Worker over HTTPS. Cloud weekly reviews then filter those events by each repository's effective `user.email`.
+
+Cloudflare deployment requires Python 3.13+, Node.js/npm, and `uv >= 0.12.3`:
+
+```bash
+cp wrangler.example.jsonc wrangler.jsonc
+npx wrangler d1 create nexusmind
+npx wrangler r2 bucket create nexusmind-files
+```
+
+Copy the generated D1 `database_id` into `wrangler.jsonc`, then run:
+
+```bash
+npx wrangler secret put SYNC_TOKEN
+npx wrangler d1 migrations apply nexusmind --remote
+uv sync --group cloudflare
+uv run --group cloudflare pywrangler deploy
+```
+
+Configure the Local Agent to replicate Git events:
+
+```text
+NEXUSMIND_CLOUD_SYNC_URL=https://<worker>.workers.dev
+NEXUSMIND_CLOUD_SYNC_TOKEN=<same value as SYNC_TOKEN>
+```
+
+## MCP Integration
+
+NexusMind includes a local **stdio MCP server** for MCP-compatible clients such as Claude Desktop and Cursor. The MCP server operates on the same local Vault and permission/OCC rules as the Web/API service.
+
+### Start the MCP server
+
+After installing the local dependencies:
+
+```bash
+pip install -e ".[local]"
+nexusmind serve --stdio
+```
+
+The equivalent script entrypoint is:
+
+```bash
+python scripts/mcp_server.py
+```
+
+The stdio process must be started by the MCP client. Do not run it as a normal interactive shell service and then try to connect to a TCP port.
+
+### Configure the Vault used by MCP
+
+By default MCP uses the same local Vault configuration as NexusMind. To point it at a different Vault, set:
+
+```text
+NEXUSMIND_VAULT_ROOT=/absolute/path/to/vault
+```
+
+Windows example:
+
+```powershell
+$env:NEXUSMIND_VAULT_ROOT="D:\Knowledge\NexusMind"
+nexusmind serve --stdio
+```
+
+macOS / Linux:
+
+```bash
+export NEXUSMIND_VAULT_ROOT="$HOME/Knowledge/NexusMind"
+nexusmind serve --stdio
+```
+
+### MCP client configuration
+
+When `nexusmind` is installed and available on `PATH`, a typical stdio MCP configuration is:
+
+```json
+{
+  "mcpServers": {
+    "nexusmind": {
+      "command": "nexusmind",
+      "args": ["serve", "--stdio"],
+      "env": {
+        "NEXUSMIND_VAULT_ROOT": "/absolute/path/to/vault"
+      }
+    }
+  }
+}
+```
+
+On Windows, use a Windows path for `NEXUSMIND_VAULT_ROOT`, for example `D:\\Knowledge\\NexusMind`.
+
+If the executable is not on `PATH`, use an absolute executable path or invoke the project script through Python.
+
+### MCP tools
+
+The current stdio server exposes these tools:
+
+- `vault_read`: read note content, version, frontmatter, tags, links, and backlinks.
+- `vault_patch`: create/update writable notes with OCC `ifMatch` protection.
+- `vault_search`: search by text/regex, folder, tags, and frontmatter properties.
+- `vault_list_unresolved`: list unresolved Wikilinks / broken links.
+- `vault_find_orphans`: list notes without incoming links.
+- `vault_compile`: compile Raw sources into a Domain knowledge card.
+- `vault_compile_pending`: preview uncompiled Raw sources.
+- `vault_incremental_compile`: compile all pending Raw sources and rebuild indexes.
+- `vault_rebuild_indices`: rebuild the Master Index and sub-indexes.
+- `vault_generate_canvas`: generate a validated Obsidian Canvas.
+- `vault_ingest`: ingest Markdown into the immutable Raw reference layer.
+- `vault_weekly_review`: generate an ISO-week review.
+
+### Deployment boundaries
+
+- **Local / Local Agent**: full stdio MCP support. This is the recommended MCP mode.
+- **Docker**: MCP can run inside the container, but the MCP client must launch the container command with stdio attached and the Vault must be mounted into the container.
+- **Cloudflare Workers**: the current Worker exposes HTTP knowledge endpoints under `/mcp/*`, but it is **not** a remote MCP transport endpoint. The standard MCP stdio server remains a Local Agent capability.
+## Local Agent Desktop App
+
+For daily use, the recommended Local Agent is the tray application rather than a permanently open terminal.
+
+Install and start it in development mode:
+
+```bash
+pip install -e ".[agent]"
+nexusmind-agent
+```
+
+The Agent configuration window manages:
+
+- local API enable/disable, host, port, and data directory;
+- Cloud / Cloudflare API URL and sync token;
+- one or more Git collection folders;
+- automatic sync interval;
+- start minimized;
+- start automatically when the user logs in.
+
+Closing the configuration window keeps the Agent running in the system tray. Use the tray menu to reopen configuration, sync immediately, reload configuration, or quit.
+
+Saving configuration performs a **hot apply**: the active collector and optional local API process are restarted with the new settings without quitting the Agent. The configuration file is also monitored, so external edits are reloaded automatically.
+
+Build a native package on the target operating system:
+
+```bash
+pip install -e ".[agent,build]"
+python packaging/build_agent.py
+```
+
+Build outputs are:
+
+- Windows: `dist/NexusMindAgent.exe`
+- macOS: `dist/NexusMindAgent.app`
+- Linux: `dist/NexusMindAgent`
+
+GitHub Actions also contains a Windows/macOS/Linux build matrix. Each platform is built natively because PyInstaller binaries are platform-specific.
+
+## Test
+
+```bash
+pip install -e ".[local,dev]"
 python -m pytest -q
 ```
 
-详细操作请参阅 [USER_MANUAL.md](USER_MANUAL.md)。
+For end-user instructions, see [USER_MANUAL.md](USER_MANUAL.md).

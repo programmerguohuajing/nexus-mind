@@ -3,6 +3,7 @@ from datetime import date
 from pathlib import Path
 
 from nexusmind.core.git_activity import (
+    collect_repository,
     discover_repositories,
     load_workflow_config,
     save_workflow_config,
@@ -24,6 +25,8 @@ def _make_repo(root: Path, name: str) -> Path:
     repo = root / name
     repo.mkdir()
     _run(repo, "init")
+    _run(repo, "config", "user.name", "Tester")
+    _run(repo, "config", "user.email", "tester@example.com")
     (repo / "README.md").write_text("# demo\n", encoding="utf-8")
     _run(repo, "add", ".")
     _run(
@@ -122,3 +125,51 @@ def test_directory_target_can_be_git_repository_itself(tmp_path):
     )
     assert result["repository_count"] == 1
     assert result["repositories"][0]["name"] == "repo-self"
+
+
+def test_collect_repository_keeps_all_users_git_log(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = _make_repo(workspace, "team-repo")
+
+    (repo / "other.txt").write_text("other\n", encoding="utf-8")
+    _run(repo, "add", ".")
+    _run(
+        repo,
+        "-c", "user.name=Other User",
+        "-c", "user.email=other@example.com",
+        "commit", "-m", "feat: other user work",
+    )
+    _run(repo, "tag", "v0.2.0")
+
+    snapshot = collect_repository(repo, day=date.today())
+    assert snapshot["current_user"]["name"] == "Tester"
+    assert snapshot["current_user"]["email"] == "tester@example.com"
+    assert snapshot["current_user_identified"] is True
+    assert snapshot["commit_count"] == 2
+    assert {item["author_email"] for item in snapshot["commits"]} == {
+        "tester@example.com",
+        "other@example.com",
+    }
+    assert snapshot["tag_count"] == 2
+    assert {item["name"] for item in snapshot["tags"]} == {"v0.1.0", "v0.2.0"}
+
+
+def test_collection_does_not_depend_on_repository_user_identity(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = workspace / "no-user"
+    repo.mkdir()
+    _run(repo, "init")
+    (repo / "README.md").write_text("# demo\n", encoding="utf-8")
+    _run(repo, "add", ".")
+    _run(
+        repo,
+        "-c", "user.name=Other User",
+        "-c", "user.email=other@example.com",
+        "commit", "-m", "feat: team work",
+    )
+
+    snapshot = collect_repository(repo, day=date.today())
+    assert snapshot["commit_count"] == 1
+    assert snapshot["commits"][0]["author_email"] == "other@example.com"

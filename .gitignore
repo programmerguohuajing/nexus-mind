@@ -10,6 +10,7 @@ htmlcov/
 
 # Virtual environment
 .venv/
+.venv-workers/
 env/
 venv/
 ENV/
@@ -33,8 +34,19 @@ workflow-config.json
 .env
 .env.*
 !.env.example
+wrangler.jsonc
+.wrangler/
+.dev.vars
+data/
 
 # OS generated files
 .DS_Store
 Thumbs.db
 *.log
+
+# Generated Cloudflare/PyInstaller build state
+python_modules/
+.wrangler-dry*/
+.uv-python/
+.uv-cache/
+*.spec

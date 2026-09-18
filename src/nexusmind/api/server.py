@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from nexusmind import __version__
-from nexusmind.config import VAULT_ROOT
+from nexusmind.config import RUNTIME_MODE, VAULT_ROOT
 from nexusmind.core.canvas import CanvasEdge, CanvasNode, generate_canvas
 from nexusmind.core.compiler import (
     auto_compile_pending_sources,
@@ -133,6 +133,22 @@ def dashboard_summary():
         "broken_links": broken["total_broken"],
         "orphans": orphans["total_orphans"],
         "recent_compilations": recent,
+    }
+
+
+@app.get("/api/runtime")
+def runtime_info():
+    return {
+        "mode": RUNTIME_MODE,
+        "capabilities": {
+            "local_filesystem": True,
+            "git_collection": True,
+            "folder_picker": True,
+            "uploads": True,
+            "knowledge_compile": True,
+            "governance": True,
+            "weekly_review": True,
+        },
     }
 
 
@@ -569,3 +585,4 @@ def vault_weekly_review_endpoint(req: ReviewRequest):
 
 
 app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web-root")

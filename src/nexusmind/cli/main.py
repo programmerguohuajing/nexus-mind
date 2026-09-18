@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="NexusMind (知枢): Agent + Obsidian Self-Growing Knowledge Operating System CLI"
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    
+
     subparsers = parser.add_subparsers(dest="command", help="Available Commands")
 
     # Serve command

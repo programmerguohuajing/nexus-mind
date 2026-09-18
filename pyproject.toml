@@ -14,26 +14,47 @@ authors = [
 ]
 dependencies = [
     "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
     "pydantic>=2.0.0",
-    "pyyaml>=6.0",
-    "httpx>=0.24.0",
     "python-multipart>=0.0.9",
-    "pypdf>=5.0.0",
-    "python-docx>=1.1.0",
 ]
 
 [project.scripts]
 nexusmind = "nexusmind.cli.main:main"
+nexusmind-agent = "nexusmind.agent.main:main"
 
 [project.optional-dependencies]
+local = [
+    "uvicorn>=0.20.0",
+    "pyyaml>=6.0",
+    "httpx>=0.24.0",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+]
+agent = [
+    "uvicorn>=0.20.0",
+    "pyyaml>=6.0",
+    "httpx>=0.24.0",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+    "PySide6>=6.6,<7",
+]
+build = [
+    "pyinstaller>=6.10",
+    "Pillow>=10.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+]
+
+[dependency-groups]
+cloudflare = [
+    "workers-py; python_version >= '3.13'",
+    "workers-runtime-sdk; python_version >= '3.13'",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-nexusmind = ["web/*"]
+nexusmind = ["web/*", "web/**/*", "agent/assets/*"]

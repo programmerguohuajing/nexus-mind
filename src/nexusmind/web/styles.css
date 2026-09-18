@@ -44,15 +44,13 @@ button, a { -webkit-tap-highlight-color: transparent; }
   border-bottom: 1px solid var(--line);
 }
 .brand-mark {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  background: #24292f;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
+  width: 34px;
+  height: 34px;
+  display: block;
+  flex: 0 0 34px;
+  border-radius: 9px;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(31, 68, 161, .18);
 }
 .brand strong { display: block; font-size: 14px; line-height: 1.2; }
 .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }

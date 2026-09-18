@@ -1,4 +1,4 @@
-﻿import re
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import mean
@@ -196,36 +196,73 @@ def _extract_git_activity(text: str) -> Dict[str, Any]:
 
     block = text[start:end]
     repositories = set(re.findall(r"^###\s+(.+)$", block, flags=re.MULTILINE))
-    commits = sum(int(x) for x in re.findall(r"今日提交：(\d+) 个", block))
-    tags = sum(int(x) for x in re.findall(r"Tag：(\d+) 个", block))
     dirty = len(re.findall(r"工作区：有未提交变更", block))
+    commits = 0
+    tags = 0
     commit_items: List[Dict[str, str]] = []
     release_tags: List[Dict[str, str]] = []
     repo_status: List[Dict[str, Any]] = []
     current_repo = ""
+    current_user_email = ""
 
     for line in block.splitlines():
         heading = re.match(r"^###\s+(.+)$", line)
         if heading:
             current_repo = heading.group(1).strip()
-            repo_status.append({"repository": current_repo, "dirty": False, "changed_count": 0})
+            current_user_email = ""
+            repo_status.append({
+                "repository": current_repo,
+                "dirty": False,
+                "changed_count": 0,
+                "current_user_email": "",
+            })
             continue
+
+        user = re.match(r"^- 采集用户：.* <([^>]+)>$", line)
+        if user and repo_status:
+            email = user.group(1).strip().lower()
+            current_user_email = "" if email == "未配置 user.email" else email
+            repo_status[-1]["current_user_email"] = current_user_email
+            continue
+
         status = re.match(r"^- 工作区：(有未提交变更|干净)（(\d+) 个文件）", line)
         if status and repo_status:
             repo_status[-1]["dirty"] = status.group(1) == "有未提交变更"
             repo_status[-1]["changed_count"] = int(status.group(2))
             continue
-        release = re.match(r"^\s+- Release/Tag：(.+)$", line)
-        if release and current_repo:
-            release_tags.append({"repository": current_repo, "tag": release.group(1).strip()})
+
+        release = re.match(
+            r"^\s+- Release/Tag：(.+?)\s+—\s+target-author\s+<([^>]+)>$",
+            line,
+        )
+        if release and current_repo and current_user_email:
+            target_email = release.group(2).strip().lower()
+            if target_email == current_user_email:
+                tags += 1
+                release_tags.append({
+                    "repository": current_repo,
+                    "tag": release.group(1).strip(),
+                    "author_email": target_email,
+                })
             continue
-        commit = re.match(r"^\s+- ([0-9a-fA-F]{7,40})\s+(.+)$", line)
-        if commit and current_repo:
-            classified = _classify_commit(commit.group(2))
+
+        commit = re.match(
+            r"^\s+- ([0-9a-fA-F]{7,40})\s+(.+?)\s+—\s+(.+?)\s+<([^>]+)>$",
+            line,
+        )
+        if commit and current_repo and current_user_email:
+            author_email = commit.group(4).strip().lower()
+            if author_email != current_user_email:
+                continue
+            subject = commit.group(2).strip()
+            classified = _classify_commit(subject)
+            commits += 1
             commit_items.append({
                 "repository": current_repo,
                 "hash": commit.group(1),
-                "subject": commit.group(2).strip(),
+                "subject": subject,
+                "author": commit.group(3).strip(),
+                "author_email": author_email,
                 **classified,
             })
 
@@ -606,7 +643,7 @@ tags:
 
 # {week_str} 工作周报
 
-> **本周摘要**  
+> **本周摘要**
 > {executive_summary}
 
 ## 📊 一周速览
@@ -716,7 +753,3 @@ tags:
         "orphans": governance["orphans"],
         "version": res["version"],
     }
-
-
-
-

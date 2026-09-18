@@ -1,135 +1,6 @@
-# NexusMind User Manual / 用户手册
+# NexusMind User Manual
 
-[中文](#中文用户手册) · [English](#english-user-manual)
-
----
-
-# 中文用户手册
-
-## 1. 启动系统
-
-安装依赖后运行：
-
-```bash
-python scripts/vault_service.py
-```
-
-浏览器打开 `http://127.0.0.1:8301/`。
-
-NexusMind 可以在没有任何历史 Vault 数据的情况下启动。首次运行看到空白数据属于正常状态。
-
-## 2. 工作流采集
-
-进入左侧 **工作流**。
-
-点击 **添加文件夹**，在目录选择器中选择一个或多个本机目录。可以多次打开选择器继续追加，已有目录不会被覆盖。
-
-选择规则：
-
-- 选择 Git 仓库目录：采集该仓库。
-- 选择上级目录：采集其直接子目录中的 Git 仓库。
-- 重复目录会自动去重。
-- 删除目录后需要点击 **保存配置**。
-保存后系统会按照配置采集：
-
-- 当前分支；
-- 当天 Commit；
-- Conventional Commit 类型与 scope；
-- Merge / PR 线索；
-- Tag / Release；
-- 工作区未提交状态；
-- 变更文件摘要。
-
-默认每 5 分钟同步一次，也可以点击 **立即同步**。
-
-## 3. 资料入库
-
-进入 **资料入库**。
-
-支持上传：
-
-- `.md`
-- `.txt`
-- `.pdf`
-- `.docx`
-
-原文件保存在本地 Vault 的 Raw 区域，同时生成可编译 Markdown。PDF 目前提取可搜索文本层，不对纯扫描图片自动 OCR。
-
-## 4. 编译知识
-
-进入 **编译队列** 查看尚未编译的 Raw 资料。
-
-编译后知识进入 Domain 层，并保留来源引用、审计记录和冲突信息。
-
-Raw 层按设计不允许普通写操作覆盖原始来源。
-## 5. 知识搜索与阅读
-
-进入 **知识搜索**：
-
-- 搜索标题和正文；
-- 打开 Markdown 富文本卡片；
-- 点击 Wikilink 跳转；
-- 查看正向链接；
-- 查看 Backlinks；
-- 内容过长时卡片内部滚动。
-
-## 6. 知识图谱与 Canvas
-
-进入 **知识图谱**：
-
-- 查看全库关系；
-- 过滤正式知识、项目或日志；
-- 点击图节点打开知识卡片；
-- 浏览现有 `.canvas` 文件及节点关系。
-
-Obsidian 不是必需客户端，只是可选的兼容编辑器。
-
-## 7. 知识治理
-
-进入 **知识治理**：
-
-- 查看未解析链接；
-- 查看孤岛笔记；
-- 重建索引；
-- 检查 Vault 结构健康状态。
-
-治理结果属于当前快照，不应在没有历史快照时解释成趋势。
-## 8. 周复盘
-
-进入 **周复盘**，选择 ISO 周并生成。
-
-周报会结合：
-
-- Git Commit；
-- Conventional Commit 分类；
-- 活跃仓库；
-- Release / Tag；
-- Daily Log；
-- 知识编译记录；
-- 治理状态。
-
-系统会提炼功能交付、安全加固、问题修复、CI/发布工程、文档沉淀等主线，并保留 Commit 明细用于追溯。
-
-## 9. 本地数据与隐私
-
-以下数据默认不进入 GitHub：
-
-- `vault/`
-- `workflow-config.json`
-- `docs/`
-- `.env*`
-- 缓存、日志、构建产物
-
-如需备份个人 Vault，请使用你自己的私有存储方案，不建议直接提交到项目仓库。
-
-## 10. 停止与重新启动
-
-终端中按 `Ctrl+C` 停止服务。
-
-再次运行 `python scripts/vault_service.py` 即可启动；已保存的本地配置仍会生效。
----
-
-# English User Manual
+[中文](USER_MANUAL_CN.md)
 
 ## 1. Start NexusMind
 
@@ -252,3 +123,103 @@ Back up your personal Vault separately using a storage method appropriate for pr
 Press `Ctrl+C` in the service terminal to stop NexusMind.
 
 Run `python scripts/vault_service.py` again to restart it. Saved local configuration remains available on that machine.
+
+## 11. Deployment Modes
+
+NexusMind supports three deployment modes:
+
+- **Local**: full local folder browsing, Git collection, filesystem Vault, and PDF/DOCX extraction.
+- **Docker**: run `docker compose up -d --build`; persistent data lives under `/data`. Mount host repositories into the container when Git collection is required.
+- **Cloudflare Workers**: Python Worker + FastAPI + D1 + R2. The Worker never browses the user's computer; a Local Agent collects complete Git history and synchronizes structured events to the cloud.
+
+Configure cloud replication on the Local Agent:
+
+```text
+NEXUSMIND_CLOUD_SYNC_URL=https://<worker>.workers.dev
+NEXUSMIND_CLOUD_SYNC_TOKEN=<SYNC_TOKEN>
+```
+
+The cloud stores complete team Git history, while weekly reviews only use commits whose author email matches each repository's effective `user.email`.
+
+## 12. Local Agent Desktop App
+
+The Local Agent can run as a system-tray application so no terminal window needs to stay open.
+
+The configuration window includes local API enable/disable, API host/port, local data directory, Cloud API URL, sync token, multiple Git collection folders, sync interval, start minimized, and start automatically at user login.
+
+Click **Save and Hot Apply** after changing settings. The Agent restarts the active collector and optional local API process with the new configuration while keeping the tray application alive.
+
+Closing the window only hides it. The tray menu provides **Open Configuration**, **Sync Now**, **Reload Configuration**, and **Quit**.
+
+The Agent also monitors its configuration file and reloads external changes automatically.
+
+Development launch:
+
+```bash
+pip install -e ".[agent]"
+nexusmind-agent
+```
+
+Native build:
+
+```bash
+pip install -e ".[agent,build]"
+python packaging/build_agent.py
+```
+
+## 13. MCP Client Configuration
+
+NexusMind includes a local stdio MCP server. Use it when an MCP-compatible desktop client needs direct access to the local Vault.
+
+Start it manually for verification:
+
+```bash
+nexusmind serve --stdio
+```
+
+Alternative:
+
+```bash
+python scripts/mcp_server.py
+```
+
+For normal MCP use, configure the MCP client to launch the process itself:
+
+```json
+{
+  "mcpServers": {
+    "nexusmind": {
+      "command": "nexusmind",
+      "args": ["serve", "--stdio"],
+      "env": {
+        "NEXUSMIND_VAULT_ROOT": "/absolute/path/to/vault"
+      }
+    }
+  }
+}
+```
+
+The stdio server exposes note read/write, search, broken-link/orphan inspection, compilation, ingestion, index rebuild, Canvas generation, and weekly review tools.
+
+Main tool names:
+
+- `vault_read`
+- `vault_patch`
+- `vault_search`
+- `vault_list_unresolved`
+- `vault_find_orphans`
+- `vault_compile`
+- `vault_compile_pending`
+- `vault_incremental_compile`
+- `vault_rebuild_indices`
+- `vault_generate_canvas`
+- `vault_ingest`
+- `vault_weekly_review`
+
+Important:
+
+- `vault_patch` uses OCC version checks when `ifMatch` is supplied.
+- the Raw reference layer remains protected from normal overwrite behavior;
+- the MCP process uses the same `NEXUSMIND_VAULT_ROOT` as local NexusMind;
+- stdio MCP is intended for Local / Local Agent use;
+- Cloudflare `/mcp/*` HTTP routes are API endpoints, not a remote MCP transport endpoint.

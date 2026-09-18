@@ -1,4 +1,4 @@
-﻿from io import BytesIO
+from io import BytesIO
 
 from docx import Document
 from fastapi.testclient import TestClient
@@ -126,4 +126,3 @@ def test_reference_listing_shows_existing_uploaded_files(tmp_path, monkeypatch):
     assert item["markdown_path"] == "60-References/Articles/sample.md"
     assert item["extracted"] is True
     assert item["compiled"] is True
-

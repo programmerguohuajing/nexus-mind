@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexusmind",
+  "main": "src/worker.py",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["python_workers"],
+  "assets": {
+    "directory": "./src/nexusmind/web",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/mcp/*", "/health", "/docs*", "/openapi.json"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nexusmind",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "nexusmind-files"
+    }
+  ]
+}
+
+// Before deploying:
+// 1. Copy this file to wrangler.jsonc.
+// 2. Create the D1 database and R2 bucket.
+// 3. Replace database_id.
+// 4. Run: npx wrangler secret put SYNC_TOKEN
+// 5. Apply migrations, then deploy with pywrangler.

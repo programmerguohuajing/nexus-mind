@@ -86,11 +86,20 @@ def test_review_includes_auto_git_activity(tmp_path):
 <!-- nexusmind:git-activity:start -->
 ## Git 工作活动（自动采集）
 ### web-eys-sdk
+- 采集用户：Tester <tester@example.com>
 - 今日提交：4 个；Merge/PR 线索：1 个；Tag：1 个
 - 工作区：有未提交变更（2 个文件）
+  - aaaaaaa feat: one — Tester <tester@example.com>
+  - bbbbbbb fix: two — Tester <tester@example.com>
+  - ccccccc ci: three — Tester <tester@example.com>
+  - ddddddd docs: four — Tester <tester@example.com>
+  - Release/Tag：v0.1.0 — target-author <tester@example.com>
 ### nexus-mind
+- 采集用户：Tester <tester@example.com>
 - 今日提交：2 个；Merge/PR 线索：0 个；Tag：0 个
 - 工作区：干净（0 个文件）
+  - eeeeeee feat: five — Tester <tester@example.com>
+  - fffffff fix: six — Tester <tester@example.com>
 <!-- nexusmind:git-activity:end -->
 """
     daily.write_text(text, encoding="utf-8")
@@ -113,13 +122,16 @@ def test_review_extracts_commit_themes_and_release(tmp_path):
 <!-- nexusmind:git-activity:start -->
 ## Git 工作活动（自动采集）
 ### web-eys-sdk
-- 今日提交：4 个；Merge/PR 线索：0 个；Tag：1 个
+- 采集用户：Tester <tester@example.com>
+- 今日提交：5 个；Merge/PR 线索：0 个；Tag：2 个
 - 工作区：干净（0 个文件）
-  - aaaaaaa feat(sdk-rn): 新增 React Native 会话回放
-  - bbbbbbb fix(security): 加固多租户隔离
-  - ccccccc ci(workflow): 新增 SDK 发布自动化
-  - ddddddd chore(release): 发布 0.8.1
-  - Release/Tag：v0.8.1
+  - aaaaaaa feat(sdk-rn): 新增 React Native 会话回放 — Tester <tester@example.com>
+  - bbbbbbb fix(security): 加固多租户隔离 — Tester <tester@example.com>
+  - ccccccc ci(workflow): 新增 SDK 发布自动化 — Tester <tester@example.com>
+  - ddddddd chore(release): 发布 0.8.1 — Tester <tester@example.com>
+  - eeeeeee feat: 其他成员功能 — Other User <other@example.com>
+  - Release/Tag：v0.8.1 — target-author <tester@example.com>
+  - Release/Tag：v-other — target-author <other@example.com>
 <!-- nexusmind:git-activity:end -->
 """
     daily.write_text(text, encoding="utf-8")
@@ -133,3 +145,36 @@ def test_review_extracts_commit_themes_and_release(tmp_path):
     assert "**版本发布**" in review
     assert "v0.8.1" in review
     assert "新增 React Native 会话回放" in review
+
+
+def test_review_filters_other_authors_from_collected_git_log(tmp_path):
+    _seed(tmp_path)
+    _write_daily(tmp_path, "2026-09-18", 1.0, 8, True)
+    daily = tmp_path / "30-Logs/Daily/2026-09-18.md"
+    text = daily.read_text(encoding="utf-8")
+    text += """
+<!-- nexusmind:git-activity:start -->
+## Git 工作活动（自动采集）
+### team-repo
+- 采集用户：Tester <tester@example.com>
+- 今日提交：3 个；Merge/PR 线索：0 个；Tag：2 个
+- 工作区：干净（0 个文件）
+  - aaaaaaa feat: my feature — Tester <tester@example.com>
+  - bbbbbbb fix: my fix — Tester <tester@example.com>
+  - ccccccc feat: teammate feature — Teammate <teammate@example.com>
+  - Release/Tag：v-mine — target-author <tester@example.com>
+  - Release/Tag：v-team — target-author <teammate@example.com>
+<!-- nexusmind:git-activity:end -->
+"""
+    daily.write_text(text, encoding="utf-8")
+
+    result = generate_weekly_review("2026-W38", vault_root=tmp_path)
+    assert result["git_commits"] == 2
+    assert result["git_tags"] == 1
+    assert result["git_active_repositories"] == ["team-repo"]
+    review = (tmp_path / result["path"]).read_text(encoding="utf-8")
+    assert "my feature" in review
+    assert "my fix" in review
+    assert "teammate feature" not in review
+    assert "v-mine" in review
+    assert "v-team" not in review

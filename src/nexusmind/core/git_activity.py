@@ -7,13 +7,13 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from nexusmind.config import PROJECT_ROOT, VAULT_ROOT
+from nexusmind.config import VAULT_ROOT, WORKFLOW_CONFIG_PATH
+from nexusmind.core.cloud_sync import deliver_git_sync
 from nexusmind.core.compiler import patch_note
 from nexusmind.core.occ import get_file_hash
 
 START_MARKER = "<!-- nexusmind:git-activity:start -->"
 END_MARKER = "<!-- nexusmind:git-activity:end -->"
-WORKFLOW_CONFIG_PATH = PROJECT_ROOT / "workflow-config.json"
 
 
 def load_workflow_config() -> Dict[str, Any]:
@@ -114,24 +114,32 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+def _repository_user(repo: Path) -> Dict[str, str]:
+    return {
+        "name": _git(repo, "config", "--get", "user.name").strip(),
+        "email": _git(repo, "config", "--get", "user.email").strip().lower(),
+    }
+
+
 def _commit_rows(repo: Path, day: date) -> List[Dict[str, Any]]:
     start = datetime.combine(day, time.min).isoformat()
     end = datetime.combine(day + timedelta(days=1), time.min).isoformat()
     output = _git(
         repo, "log", f"--since={start}", f"--until={end}", "--date=iso-strict",
-        "--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s",
+        "--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%ae%x1f%s",
     )
     commits: List[Dict[str, Any]] = []
     for line in output.splitlines():
-        parts = line.split("\x1f", 4)
-        if len(parts) != 5:
+        parts = line.split("\x1f", 5)
+        if len(parts) != 6:
             continue
-        full, short, authored_at, author, subject = parts
+        full, short, authored_at, author, email, subject = parts
         commits.append({
             "hash": full,
             "short": short,
             "authored_at": authored_at,
             "author": author,
+            "author_email": email.strip().lower(),
             "subject": subject,
             "is_merge": subject.lower().startswith("merge ") or "pull request #" in subject.lower(),
         })
@@ -150,8 +158,15 @@ def _tag_rows(repo: Path, day: date) -> List[Dict[str, str]]:
             created_day = datetime.fromisoformat(created.replace("Z", "+00:00")).date()
         except ValueError:
             continue
-        if created_day == day:
-            items.append({"name": name, "created_at": created})
+        if created_day != day:
+            continue
+        commit = _git(repo, "rev-list", "-n", "1", name)
+        commit_email = _git(repo, "show", "-s", "--format=%ae", commit).strip().lower() if commit else ""
+        items.append({
+            "name": name,
+            "created_at": created,
+            "target_author_email": commit_email,
+        })
     return items
 
 
@@ -167,6 +182,7 @@ def _working_tree(repo: Path) -> Dict[str, Any]:
 
 def collect_repository(repo: Path, day: Optional[date] = None) -> Dict[str, Any]:
     day = day or date.today()
+    current_user = _repository_user(repo)
     commits = _commit_rows(repo, day)
     tags = _tag_rows(repo, day)
     tree = _working_tree(repo)
@@ -179,6 +195,8 @@ def collect_repository(repo: Path, day: Optional[date] = None) -> Dict[str, Any]
         "path": str(repo),
         "branch": branch,
         "remote": remote,
+        "current_user": current_user,
+        "current_user_identified": bool(current_user["email"]),
         "commits": commits,
         "commit_count": len(commits),
         "merge_count": sum(1 for item in commits if item["is_merge"]),
@@ -209,13 +227,20 @@ def _managed_block(snapshots: List[Dict[str, Any]], synced_at: str) -> str:
             f"- 项目活动：[[20-Projects/Repositories/{slug}/Repository-Activity|{repo['name']}]]",
             f"- 仓库：{repo['path']}",
             f"- 分支：{repo['branch']}",
+            f"- 采集用户：{repo['current_user']['name'] or 'Unknown'} <{repo['current_user']['email'] or '未配置 user.email'}>",
             f"- 今日提交：{repo['commit_count']} 个；Merge/PR 线索：{repo['merge_count']} 个；Tag：{repo['tag_count']} 个",
             f"- 工作区：{'有未提交变更' if tree['dirty'] else '干净'}（{tree['changed_count']} 个文件）",
         ])
         for commit in repo["commits"]:
-            lines.append(f"  - {commit['short']} {commit['subject']}")
+            lines.append(
+                f"  - {commit['short']} {commit['subject']} "
+                f"— {commit['author']} <{commit['author_email']}>"
+            )
         for tag in repo["tags"]:
-            lines.append(f"  - Release/Tag：{tag['name']}")
+            lines.append(
+                f"  - Release/Tag：{tag['name']} "
+                f"— target-author <{tag.get('target_author_email') or 'unknown'}>"
+            )
         if tree["changed_files"]:
             lines.append("  - 未提交文件：" + "、".join(tree["changed_files"][:8]))
         lines.append("")
@@ -271,6 +296,7 @@ tags:
 ## 当前状态
 - 路径：{repo['path']}
 - 分支：{repo['branch']}
+- 采集用户：{repo['current_user']['name'] or 'Unknown'} <{repo['current_user']['email'] or '未配置 user.email'}>
 - Remote：{repo['remote'] or '未配置'}
 - 工作区：{'有未提交变更' if tree['dirty'] else '干净'}（{tree['changed_count']} 个文件）
 - 今日 Tag：{tags}
@@ -327,4 +353,5 @@ def sync_git_activity(
     project_notes = [_write_project_snapshot(repo, synced_at, vault_root) for repo in snapshots]
     result["daily_log"] = daily_rel
     result["project_notes"] = project_notes
+    result["cloud_sync"] = deliver_git_sync(result)
     return result

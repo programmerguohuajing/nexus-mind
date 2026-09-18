@@ -1,9 +1,9 @@
-﻿const app = document.getElementById("app");
+const app = document.getElementById("app");
 const titleEl = document.getElementById("pageTitle");
 const toastEl = document.getElementById("toast");
 const serviceDot = document.getElementById("serviceDot");
 const serviceText = document.getElementById("serviceText");
-const state = { view: "dashboard", selectedNote: null, uploadFiles: [] };
+const state = { view: "dashboard", selectedNote: null, uploadFiles: [], runtime: null };
 
 const titles = {
   dashboard: "知识库总览",
@@ -740,6 +740,17 @@ async function openCanvas(path) {
 }
 
 async function renderWorkflow() {
+  if (state.runtime?.mode === "cloudflare") {
+    app.innerHTML = '<div class="section-title"><h2>云端工作流</h2><span class="muted">Git 数据由 Local Agent 同步到 Cloudflare</span></div>'
+      + '<div class="card"><h3>Cloudflare 模式</h3>'
+      + '<p class="muted">云端不会浏览本机磁盘或执行 git。请在本机 NexusMind 配置采集目录，并设置 NEXUSMIND_CLOUD_SYNC_URL 与 NEXUSMIND_CLOUD_SYNC_TOKEN。</p></div>'
+      + '<div class="section-title"><h2>同步状态</h2><div class="actions"><button class="btn ghost" onclick="loadWorkflow()">刷新状态</button></div></div>'
+      + '<div id="workflowSummary" class="grid stats"></div>'
+      + '<div class="section-title"><h2>已同步仓库</h2><span class="muted">来自 Local Agent</span></div>'
+      + '<div id="workflowRepos" class="card"><div class="empty">正在读取云端仓库状态…</div></div>';
+    await loadWorkflow();
+    return;
+  }
   app.innerHTML = '<div class="section-title"><h2>采集范围配置</h2><span class="muted">选择一个或多个本机文件夹</span></div>'
     + '<div class="card workflow-config">'
     + '<div class="workflow-folder-actions"><div><strong>采集文件夹</strong>'
@@ -938,13 +949,16 @@ async function loadWorkflow() {
   const repos = document.getElementById("workflowRepos");
   try {
     const data = await api("/api/workflow");
+    const cloudMode = state.runtime?.mode === "cloudflare";
     summary.innerHTML =
-      '<div class="card"><div class="stat-label">采集文件夹</div><div class="stat-value">' + data.targets.length + '</div><div class="stat-note">' + (data.configured ? "已配置" : "未配置") + '</div></div>'
-      + '<div class="card"><div class="stat-label">Git 仓库</div><div class="stat-value">' + data.repository_count + '</div><div class="stat-note">由配置解析</div></div>'
-      + '<div class="card"><div class="stat-label">今日 Commit</div><div class="stat-value">' + data.commit_count + '</div><div class="stat-note">同步后写入 Daily Log</div></div>'
+      '<div class="card"><div class="stat-label">' + (cloudMode ? "同步仓库" : "采集文件夹") + '</div><div class="stat-value">' + (cloudMode ? data.repository_count : data.targets.length) + '</div><div class="stat-note">' + (cloudMode ? "Local Agent 上报" : (data.configured ? "已配置" : "未配置")) + '</div></div>'
+      + '<div class="card"><div class="stat-label">Git 仓库</div><div class="stat-value">' + data.repository_count + '</div><div class="stat-note">' + (cloudMode ? "D1 事件库" : "由配置解析") + '</div></div>'
+      + '<div class="card"><div class="stat-label">今日 Commit</div><div class="stat-value">' + data.commit_count + '</div><div class="stat-note">' + (cloudMode ? "D1 已同步事件" : "同步后写入 Daily Log") + '</div></div>'
       + '<div class="card"><div class="stat-label">今日 Tag</div><div class="stat-value">' + data.tag_count + '</div><div class="stat-note">Release 线索</div></div>';
     if (!data.configured) {
-      repos.innerHTML = '<div class="empty">尚未配置采集范围<br><span class="muted">点击“选择文件夹”，可一次选择多个目录，保存后开始采集</span></div>';
+      repos.innerHTML = cloudMode
+        ? '<div class="empty">尚未收到 Local Agent 的 Git 同步数据</div>'
+        : '<div class="empty">尚未配置采集范围<br><span class="muted">点击“选择文件夹”，可一次选择多个目录，保存后开始采集</span></div>';
       return;
     }
     if (!data.repositories.length) {
@@ -962,7 +976,8 @@ async function loadWorkflow() {
       return '<div class="workflow-repo"><div class="workflow-repo-head"><div><strong>' + esc(repo.name) + '</strong>'
         + '<div class="reference-sub">' + esc(repo.path) + '</div></div><div class="actions">'
         + '<span class="badge">' + esc(repo.branch) + '</span>' + status + '</div></div>'
-        + '<div class="workflow-meta">今日 ' + repo.commit_count + ' commits · ' + repo.merge_count + ' merge/PR · '
+        + '<div class="workflow-meta">复盘身份：' + esc((repo.current_user?.name || "Unknown") + " <" + (repo.current_user?.email || "未配置 user.email") + ">") + '</div>'
+        + '<div class="workflow-meta">今日全部 ' + repo.commit_count + ' commits · ' + repo.merge_count + ' merge/PR · '
         + repo.tag_count + ' tags · ' + tree.changed_count + ' 未提交文件</div>' + commits + '</div>';
     }).join("");
   } catch (e) {
@@ -1013,6 +1028,23 @@ async function runReview() {
     resultEl.textContent = "生成失败：" + e.message;
   }
 }
+async function loadRuntime() {
+  try {
+    state.runtime = await api("/api/runtime");
+  } catch (_) {
+    state.runtime = { mode: "local", capabilities: {} };
+  }
+  const capabilities = state.runtime.capabilities || {};
+  const viewCaps = {
+    compile: "knowledge_compile",
+    governance: "governance"
+  };
+  Object.keys(viewCaps).forEach(function(view) {
+    const button = document.querySelector('.nav-item[data-view="' + view + '"]');
+    if (button && capabilities[viewCaps[view]] === false) button.hidden = true;
+  });
+}
+
 async function checkHealth() {
   try {
     const data = await api("/health");
@@ -1026,6 +1058,15 @@ async function checkHealth() {
 
 async function renderCurrent() {
   titleEl.textContent = titles[state.view];
+  const caps = state.runtime?.capabilities || {};
+  if (state.view === "compile" && caps.knowledge_compile === false) {
+    app.innerHTML = '<div class="card empty">Cloudflare 模式下知识编译由 Local Agent 执行后同步；云端不直接运行本地编译器。</div>';
+    return;
+  }
+  if (state.view === "governance" && caps.governance === false) {
+    app.innerHTML = '<div class="card empty">当前 Cloudflare 运行模式未启用完整知识治理；知识图谱与搜索仍可使用。</div>';
+    return;
+  }
   if (state.view === "dashboard") return renderDashboard();
   if (state.view === "search") app.innerHTML = searchTemplate();
   if (state.view === "graph") return renderGraph();
@@ -1059,8 +1100,10 @@ document.addEventListener("keydown", function(event) {
   }
 });
 
-checkHealth();
-renderCurrent();
+async function bootstrap() {
+  await loadRuntime();
+  await checkHealth();
+  await renderCurrent();
+}
 
-
-
+bootstrap();

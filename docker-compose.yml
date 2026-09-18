@@ -1,0 +1,26 @@
+services:
+  nexusmind:
+    build: .
+    container_name: nexusmind
+    ports:
+      - "8301:8301"
+    environment:
+      NEXUSMIND_RUNTIME: docker
+      NEXUSMIND_DATA_ROOT: /data
+      NEXUSMIND_HOST: 0.0.0.0
+      NEXUSMIND_PORT: 8301
+      NEXUSMIND_GIT_SYNC_INTERVAL: 300
+      # Optional cloud replication:
+      # NEXUSMIND_CLOUD_SYNC_URL: https://nexusmind.<subdomain>.workers.dev
+      # NEXUSMIND_CLOUD_SYNC_TOKEN: change-me
+    volumes:
+      - nexusmind-data:/data
+      # Mount host repositories when Git collection is needed in Docker.
+      # Linux/macOS example:
+      # - /home/me/code:/workspaces:ro
+      # Windows Docker Desktop example:
+      # - D:/codex:/workspaces:ro
+    restart: unless-stopped
+
+volumes:
+  nexusmind-data:
