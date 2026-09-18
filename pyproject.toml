@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexusmind"
+version = "4.0.0"
+description = "NexusMind: Agent + Obsidian Self-Growing Knowledge Operating System"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "NexusMind Contributors"}
+]
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "httpx>=0.24.0",
+    "python-multipart>=0.0.9",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+]
+
+[project.scripts]
+nexusmind = "nexusmind.cli.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nexusmind = ["web/*"]

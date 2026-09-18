@@ -1,0 +1,722 @@
+﻿import re
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from statistics import mean
+from typing import Any, Dict, List, Optional
+
+from nexusmind.config import VAULT_ROOT
+from nexusmind.core.compiler import patch_note
+from nexusmind.core.indexer import find_broken_links, find_orphans
+from nexusmind.core.storage import extract_frontmatter
+
+
+def _parse_week(week_str: str) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d{4})-W(\d{2})", week_str)
+    if not match:
+        raise ValueError("week must use ISO format YYYY-Www")
+    year, week = int(match.group(1)), int(match.group(2))
+    date.fromisocalendar(year, week, 1)
+    return year, week
+
+
+def _previous_week(week_str: str) -> str:
+    year, week = _parse_week(week_str)
+    monday = date.fromisocalendar(year, week, 1) - timedelta(days=7)
+    iso = monday.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _belongs_to_week(stem: str, year: int, week: int) -> bool:
+    try:
+        day = date.fromisoformat(stem)
+    except ValueError:
+        return False
+    iso = day.isocalendar()
+    return iso.year == year and iso.week == week
+
+
+def _split_markdown_row(line: str) -> List[str]:
+    """按 Markdown 表格列切分，但不把 [[target|alias]] 内的 | 当分隔符。"""
+    text = line.strip()
+    if not text.startswith("|"):
+        return []
+    cells: List[str] = []
+    current: List[str] = []
+    wiki_depth = 0
+    i = 1
+    while i < len(text):
+        pair = text[i:i + 2]
+        if pair == "[[":
+            wiki_depth += 1
+            current.append(pair)
+            i += 2
+            continue
+        if pair == "]]" and wiki_depth:
+            wiki_depth -= 1
+            current.append(pair)
+            i += 2
+            continue
+        ch = text[i]
+        if ch == "|" and wiki_depth == 0:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+        i += 1
+    if current:
+        cells.append("".join(current).strip())
+    if cells and cells[-1] == "":
+        cells.pop()
+    return cells
+def _table_rows(text: str) -> List[List[str]]:
+    rows: List[List[str]] = []
+    for line in text.splitlines():
+        cells = _split_markdown_row(line)
+        if len(cells) < 2:
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _extract_task_rows(text: str, day: str) -> List[Dict[str, str]]:
+    rows = _table_rows(text)
+    if not rows:
+        return []
+    header_index = -1
+    header: List[str] = []
+    for idx, row in enumerate(rows):
+        normalized = [c.strip().lower() for c in row]
+        if any(x in normalized for x in ("关联任务", "时间段", "项目", "所属项目")):
+            header_index = idx
+            header = row
+            break
+    if header_index < 0:
+        return []
+
+    tasks: List[Dict[str, str]] = []
+    for row in rows[header_index + 1:]:
+        if len(row) != len(header):
+            continue
+        item = {header[i].strip(): row[i].strip() for i in range(len(header))}
+        task = item.get("关联任务") or item.get("任务") or item.get("时间段") or ""
+        project = item.get("所属项目") or item.get("项目") or ""
+        hours = item.get("阶段投入 (h)") or item.get("投入工时") or ""
+        output = item.get("交付产出与进展") or item.get("产出") or item.get("执行产出与记录") or ""
+        link = item.get("关联笔记/卡片") or ""
+        if not any((task, project, hours, output, link)):
+            continue
+        tasks.append({
+            "date": day,
+            "task": task,
+            "project": project,
+            "hours": hours,
+            "output": output,
+            "link": link,
+        })
+    return tasks
+
+
+def _extract_checklist(text: str) -> tuple[List[str], List[str]]:
+    completed: List[str] = []
+    pending: List[str] = []
+    for line in text.splitlines():
+        match = re.match(r"\s*[-*]?\s*\[([ xX])\]\s*(.+)", line)
+        if not match:
+            continue
+        value = re.sub(r"\*\*", "", match.group(2)).strip()
+        if match.group(1).lower() == "x":
+            completed.append(value)
+        else:
+            pending.append(value)
+    return completed, pending
+
+
+def _numeric(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+COMMIT_TYPE_LABELS = {
+    "feat": "功能交付",
+    "fix": "问题修复",
+    "perf": "性能优化",
+    "refactor": "架构重构",
+    "security": "安全加固",
+    "ci": "CI / 发布工程",
+    "build": "构建工程",
+    "test": "测试质量",
+    "docs": "文档沉淀",
+    "chore": "工程维护",
+    "release": "版本发布",
+}
+
+
+def _classify_commit(subject: str) -> Dict[str, str]:
+    match = re.match(
+        r"^(?P<type>[A-Za-z0-9_-]+)(?:\((?P<scope>[^)]+)\))?!?:\s*(?P<title>.+)$",
+        subject.strip(),
+    )
+    if match:
+        commit_type = match.group("type").lower()
+        scope = (match.group("scope") or "").strip()
+        title = match.group("title").strip()
+    else:
+        commit_type, scope, title = "other", "", subject.strip()
+    if commit_type == "fix" and scope.lower() in {"security", "auth"}:
+        category = "安全加固"
+    elif commit_type == "chore" and scope.lower() == "release":
+        category = "版本发布"
+    else:
+        category = COMMIT_TYPE_LABELS.get(commit_type, "其他变更")
+    return {
+        "type": commit_type,
+        "scope": scope,
+        "title": title,
+        "category": category,
+    }
+
+
+def _extract_git_activity(text: str) -> Dict[str, Any]:
+    start = text.find("<!-- nexusmind:git-activity:start -->")
+    end = text.find("<!-- nexusmind:git-activity:end -->")
+    if start < 0 or end < 0 or end <= start:
+        return {
+            "commits": 0,
+            "tags": 0,
+            "repositories": set(),
+            "dirty_repositories": 0,
+            "commit_items": [],
+            "release_tags": [],
+            "repo_status": [],
+        }
+
+    block = text[start:end]
+    repositories = set(re.findall(r"^###\s+(.+)$", block, flags=re.MULTILINE))
+    commits = sum(int(x) for x in re.findall(r"今日提交：(\d+) 个", block))
+    tags = sum(int(x) for x in re.findall(r"Tag：(\d+) 个", block))
+    dirty = len(re.findall(r"工作区：有未提交变更", block))
+    commit_items: List[Dict[str, str]] = []
+    release_tags: List[Dict[str, str]] = []
+    repo_status: List[Dict[str, Any]] = []
+    current_repo = ""
+
+    for line in block.splitlines():
+        heading = re.match(r"^###\s+(.+)$", line)
+        if heading:
+            current_repo = heading.group(1).strip()
+            repo_status.append({"repository": current_repo, "dirty": False, "changed_count": 0})
+            continue
+        status = re.match(r"^- 工作区：(有未提交变更|干净)（(\d+) 个文件）", line)
+        if status and repo_status:
+            repo_status[-1]["dirty"] = status.group(1) == "有未提交变更"
+            repo_status[-1]["changed_count"] = int(status.group(2))
+            continue
+        release = re.match(r"^\s+- Release/Tag：(.+)$", line)
+        if release and current_repo:
+            release_tags.append({"repository": current_repo, "tag": release.group(1).strip()})
+            continue
+        commit = re.match(r"^\s+- ([0-9a-fA-F]{7,40})\s+(.+)$", line)
+        if commit and current_repo:
+            classified = _classify_commit(commit.group(2))
+            commit_items.append({
+                "repository": current_repo,
+                "hash": commit.group(1),
+                "subject": commit.group(2).strip(),
+                **classified,
+            })
+
+    return {
+        "commits": commits,
+        "tags": tags,
+        "repositories": repositories,
+        "dirty_repositories": dirty,
+        "commit_items": commit_items,
+        "release_tags": release_tags,
+        "repo_status": repo_status,
+    }
+
+
+def _week_data(week_str: str, vault_root: Path) -> Dict[str, Any]:
+    year, week = _parse_week(week_str)
+    daily_dir = vault_root / "30-Logs" / "Daily"
+    daily_files = [
+        p for p in daily_dir.glob("*.md")
+        if _belongs_to_week(p.stem, year, week)
+    ] if daily_dir.exists() else []
+
+    total_hours = 0.0
+    focus_scores: List[float] = []
+    completed: List[str] = []
+    pending: List[str] = []
+    tasks: List[Dict[str, str]] = []
+    outputs: List[str] = []
+    projects: set[str] = set()
+    git_commits = 0
+    git_tags = 0
+    git_repositories: set[str] = set()
+    git_dirty_repositories = 0
+    git_commit_items: List[Dict[str, str]] = []
+    git_release_tags: List[Dict[str, str]] = []
+    git_repo_status: Dict[str, Dict[str, Any]] = {}
+
+    for daily in sorted(daily_files):
+        text = daily.read_text(encoding="utf-8")
+        fm = extract_frontmatter(text)
+        hours = _numeric(fm.get("total_hours"))
+        focus = _numeric(fm.get("focus_score"))
+        if hours is not None:
+            total_hours += hours
+        if focus is not None:
+            focus_scores.append(focus)
+        done, todo = _extract_checklist(text)
+        completed.extend(done)
+        pending.extend(todo)
+        daily_tasks = _extract_task_rows(text, daily.stem)
+        tasks.extend(daily_tasks)
+        git = _extract_git_activity(text)
+        git_commits += git["commits"]
+        git_tags += git["tags"]
+        git_repositories.update(git["repositories"])
+        git_dirty_repositories = max(git_dirty_repositories, git["dirty_repositories"])
+        git_commit_items.extend(git.get("commit_items", []))
+        git_release_tags.extend(git.get("release_tags", []))
+        for repo in git.get("repo_status", []):
+            git_repo_status[repo["repository"]] = repo
+        for item in daily_tasks:
+            if item["project"]:
+                projects.add(item["project"])
+            if item["output"]:
+                outputs.append(item["output"])
+
+    return {
+        "daily_files": daily_files,
+        "total_hours": total_hours,
+        "focus_scores": focus_scores,
+        "avg_focus": mean(focus_scores) if focus_scores else None,
+        "completed": completed,
+        "pending": pending,
+        "tasks": tasks,
+        "outputs": outputs,
+        "projects": sorted(projects),
+        "git_commits": git_commits,
+        "git_tags": git_tags,
+        "git_repositories": sorted(git_repositories),
+        "git_dirty_repositories": git_dirty_repositories,
+        "git_commit_items": git_commit_items,
+        "git_release_tags": git_release_tags,
+        "git_repo_status": list(git_repo_status.values()),
+    }
+
+
+def _compilation_stats(week_str: str, vault_root: Path) -> Dict[str, Any]:
+    year, week = _parse_week(week_str)
+    log_file = vault_root / "00-Meta" / "COMPILATION-LOG.md"
+    stats: Dict[str, Any] = {
+        "total": 0,
+        "created": 0,
+        "updated": 0,
+        "targets": [],
+        "domains": {},
+    }
+    if not log_file.exists():
+        return stats
+    current_in_week = False
+    targets: List[str] = []
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"## \[(\d{4}-\d{2}-\d{2}) ", line)
+        if match:
+            d = date.fromisoformat(match.group(1)).isocalendar()
+            current_in_week = d.year == year and d.week == week
+            if current_in_week:
+                stats["total"] += 1
+            continue
+        if not current_in_week:
+            continue
+        if "操作类型" in line and "新建卡片" in line:
+            stats["created"] += 1
+        elif "操作类型" in line and "增量更新" in line:
+            stats["updated"] += 1
+        target = re.search(r"\*\*编译目标\*\*:\s*`\[\[([^\]]+)\]\]`", line)
+        if target:
+            path = target.group(1).strip()
+            if path not in targets:
+                targets.append(path)
+
+    stats["targets"] = targets
+    domains: Dict[str, int] = {}
+    for path in targets:
+        parts = path.split("/")
+        domain = parts[1] if len(parts) > 2 and parts[0] == "40-Domain" else "Other"
+        domains[domain] = domains.get(domain, 0) + 1
+    stats["domains"] = domains
+    return stats
+
+def _group_commit_highlights(data: Dict[str, Any]) -> Dict[str, Any]:
+    by_repo: Dict[str, List[Dict[str, str]]] = {}
+    by_category: Dict[str, List[Dict[str, str]]] = {}
+    for item in data.get("git_commit_items", []):
+        by_repo.setdefault(item["repository"], []).append(item)
+        by_category.setdefault(item["category"], []).append(item)
+
+    category_order = [
+        "版本发布",
+        "功能交付",
+        "安全加固",
+        "问题修复",
+        "架构重构",
+        "性能优化",
+        "CI / 发布工程",
+        "构建工程",
+        "测试质量",
+        "文档沉淀",
+        "工程维护",
+        "其他变更",
+    ]
+    category_lines: List[str] = []
+    for category in category_order:
+        items = by_category.get(category, [])
+        if not items:
+            continue
+        titles = []
+        for item in items:
+            title = item["title"]
+            if title not in titles:
+                titles.append(title)
+        preview = "；".join(titles[:4])
+        if len(titles) > 4:
+            preview += f"；另有 {len(titles) - 4} 项"
+        repos = sorted({item["repository"] for item in items})
+        category_lines.append(
+            f"- **{category}** · {len(items)} 个提交 · {', '.join(repos)}：{preview}"
+        )
+
+    repo_lines: List[str] = []
+    for repo, items in sorted(by_repo.items(), key=lambda pair: (-len(pair[1]), pair[0].lower())):
+        categories: Dict[str, int] = {}
+        for item in items:
+            categories[item["category"]] = categories.get(item["category"], 0) + 1
+        category_text = "、".join(
+            f"{name} {count}"
+            for name, count in sorted(categories.items(), key=lambda pair: (-pair[1], pair[0]))
+        )
+        repo_lines.append(f"- **{repo}**：{len(items)} 个提交（{category_text}）")
+
+    releases = data.get("git_release_tags", [])
+    release_lines = [
+        f"- **{item['repository']}** 发布 / 标记 `{item['tag']}`"
+        for item in releases
+    ]
+    return {
+        "by_repo": by_repo,
+        "by_category": by_category,
+        "category_lines": category_lines,
+        "repo_lines": repo_lines,
+        "release_lines": release_lines,
+    }
+
+
+def _executive_summary(
+    data: Dict[str, Any],
+    compile_stats: Dict[str, Any],
+) -> str:
+    commits = data.get("git_commit_items", [])
+    releases = data.get("git_release_tags", [])
+    active_repos = sorted({item["repository"] for item in commits})
+    if not active_repos:
+        active_repos = data.get("git_repositories", [])
+
+    phrases: List[str] = []
+    if active_repos:
+        focus = "、".join(active_repos[:3])
+        if len(active_repos) > 3:
+            focus += f" 等 {len(active_repos)} 个仓库"
+        phrases.append(f"本周工作主要覆盖 {focus}")
+    if releases:
+        release_text = "、".join(
+            f"{item['repository']} {item['tag']}" for item in releases[:3]
+        )
+        phrases.append(f"完成 {release_text} 的版本发布/标记")
+    grouped = _group_commit_highlights(data)
+    major_categories = [
+        name
+        for name in ("功能交付", "安全加固", "问题修复", "CI / 发布工程", "架构重构")
+        if grouped["by_category"].get(name)
+    ]
+    if major_categories:
+        phrases.append("主要变更集中在" + "、".join(major_categories[:4]))
+    targets = compile_stats.get("targets", [])
+    if targets:
+        phrases.append(f"同步沉淀 {len(targets)} 个正式知识主题")
+    if not phrases:
+        return "本周暂无足够的结构化工作数据用于提炼。"
+    return "；".join(phrases) + "。"
+
+
+def _knowledge_highlights(compile_stats: Dict[str, Any]) -> str:
+    targets = compile_stats.get("targets", [])
+    if not targets:
+        return "- 本周没有可识别的正式知识编译目标。"
+    domains = compile_stats.get("domains", {})
+    lines = []
+    if domains:
+        domain_text = "、".join(
+            f"{domain} {count} 个"
+            for domain, count in sorted(domains.items(), key=lambda pair: (-pair[1], pair[0]))
+        )
+        lines.append(f"- 知识主题分布：{domain_text}。")
+    display_targets = targets[:10]
+    lines.extend(f"- [[{path}|{Path(path).stem}]]" for path in display_targets)
+    if len(targets) > len(display_targets):
+        lines.append(f"- 另有 {len(targets) - len(display_targets)} 个知识主题已完成编译。")
+    return "\n".join(lines)
+
+
+def _git_commit_details(data: Dict[str, Any]) -> str:
+    items = data.get("git_commit_items", [])
+    if not items:
+        return "- 本周没有采集到 Git Commit 明细。"
+    by_repo: Dict[str, List[Dict[str, str]]] = {}
+    for item in items:
+        by_repo.setdefault(item["repository"], []).append(item)
+    lines: List[str] = []
+    for repo, commits in sorted(by_repo.items()):
+        lines.append(f"### {repo}")
+        for item in commits:
+            scope = f"({item['scope']})" if item.get("scope") else ""
+            lines.append(
+                f"- `{item['hash']}` **{item['type']}{scope}** · {item['title']}"
+            )
+    return "\n".join(lines)
+
+def _comparison(current: Dict[str, Any], previous: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+    cur_days = len(current["daily_files"])
+    prev_days = len(previous["daily_files"])
+    if prev_days == 0 and cur_days == 0:
+        return ["- 当前周与上周均无 Daily Log，无法形成趋势对比。"]
+
+    lines.append(f"- 日志覆盖：本周 {cur_days} 天；上周 {prev_days} 天。")
+    lines.append(f"- 总投入：本周 {current['total_hours']:.1f}h；上周 {previous['total_hours']:.1f}h。")
+    if current["avg_focus"] is not None or previous["avg_focus"] is not None:
+        cur = f"{current['avg_focus']:.1f}" if current["avg_focus"] is not None else "无数据"
+        prev = f"{previous['avg_focus']:.1f}" if previous["avg_focus"] is not None else "无数据"
+        lines.append(f"- 平均专注度：本周 {cur}；上周 {prev}。")
+    lines.append(f"- 已完成清单项：本周 {len(current['completed'])} 项；上周 {len(previous['completed'])} 项。")
+    lines.append(f"- Git Commit：本周 {current['git_commits']} 个；上周 {previous['git_commits']} 个。")
+    return lines
+
+
+def _attention_items(data: Dict[str, Any], broken_count: int, orphan_count: int) -> List[str]:
+    items: List[str] = []
+    if len(data["daily_files"]) < 3:
+        items.append("本周 Daily Log 少于 3 天，趋势判断样本不足；优先补齐日常记录。")
+    if data["pending"]:
+        items.append(f"仍有 {len(data['pending'])} 个未完成清单项，建议确认是否顺延到下一周。")
+    if data["git_dirty_repositories"]:
+        items.append(f"当前有 {data['git_dirty_repositories']} 个仓库存在未提交变更，建议确认是否需要提交、拆分或清理。")
+    if broken_count:
+        items.append(f"知识库当前有 {broken_count} 个未解析链接，建议先处理真实死链并降低误报。")
+    if orphan_count:
+        items.append(f"知识库当前有 {orphan_count} 个孤岛条目，建议确认入口或治理规则。")
+    if not items:
+        items.append("本周未检测到明显治理风险；下周继续保持日志记录和知识编译节奏。")
+    return items
+
+
+def _bullet_lines(values: List[str], empty_text: str) -> str:
+    return "\n".join(f"- {v}" for v in values) if values else f"- {empty_text}"
+def generate_weekly_review(
+    week_str: Optional[str] = None,
+    vault_root: Path = VAULT_ROOT,
+) -> Dict[str, Any]:
+    """从真实周数据生成结构化复盘；不调用模型，不补写日志中不存在的事实。"""
+    if not week_str:
+        now = datetime.now().isocalendar()
+        week_str = f"{now.year}-W{now.week:02d}"
+    _parse_week(week_str)
+
+    data = _week_data(week_str, vault_root)
+    previous_week = _previous_week(week_str)
+    previous = _week_data(previous_week, vault_root)
+    compile_stats = _compilation_stats(week_str, vault_root)
+    governance = {
+        "broken": find_broken_links(vault_root=vault_root)["total_broken"],
+        "orphans": find_orphans(vault_root=vault_root)["total_orphans"],
+    }
+    project_files = list((vault_root / "20-Projects").rglob("*.md")) if (vault_root / "20-Projects").exists() else []
+
+    task_lines = []
+    for item in data["tasks"]:
+        parts = [f"**{item['date']}**"]
+        if item["task"]:
+            parts.append(item["task"])
+        if item["project"]:
+            parts.append(f"项目：{item['project']}")
+        if item["hours"]:
+            parts.append(f"投入：{item['hours']}h")
+        if item["output"]:
+            parts.append(f"产出：{item['output']}")
+        if item["link"]:
+            parts.append(f"关联：{item['link']}")
+        task_lines.append("- " + " · ".join(parts))
+
+    comparison = "\n".join(_comparison(data, previous))
+    attention = _bullet_lines(
+        _attention_items(data, governance["broken"], governance["orphans"]),
+        "暂无需特别关注事项",
+    )
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    avg_focus = f"{data['avg_focus']:.1f}/10" if data["avg_focus"] is not None else "无数据"
+    projects = "、".join(data["projects"]) if data["projects"] else "未从结构化任务中识别"
+    detail = "\n".join(task_lines) if task_lines else "- 本周暂无结构化任务明细。"
+
+    git_summary = _group_commit_highlights(data)
+    active_git_repositories = sorted(git_summary["by_repo"].keys())
+    executive_summary = _executive_summary(data, compile_stats)
+    category_highlights = "\n".join(git_summary["category_lines"]) or "- 本周没有可提炼的 Git 变更主线。"
+    repo_highlights = "\n".join(git_summary["repo_lines"]) or "- 本周没有活跃 Git 仓库。"
+    release_highlights = "\n".join(git_summary["release_lines"]) or "- 本周没有采集到版本发布 / Tag。"
+    knowledge_highlights = _knowledge_highlights(compile_stats)
+    commit_details = _git_commit_details(data)
+    status_icon = "✅" if not data["pending"] and not data["git_dirty_repositories"] else "🟡"
+
+    content = f"""---
+title: "{week_str} 工作周报"
+generated_at: "{timestamp}"
+week: "{week_str}"
+total_hours: {data['total_hours']:.1f}
+avg_focus: "{avg_focus}"
+completed_items: {len(data['completed'])}
+pending_items: {len(data['pending'])}
+compiled_items: {compile_stats['total']}
+knowledge_topics: {len(compile_stats.get('targets', []))}
+git_commits: {data['git_commits']}
+git_tags: {data['git_tags']}
+broken_links: {governance['broken']}
+orphans: {governance['orphans']}
+tags:
+  - "#review"
+  - "#weekly-review"
+  - "#work-report"
+---
+
+# {week_str} 工作周报
+
+> **本周摘要**  
+> {executive_summary}
+
+## 📊 一周速览
+
+| 指标 | 本周 |
+| --- | ---: |
+| 日志覆盖 | {len(data['daily_files'])} 天 |
+| Git Commit | {data['git_commits']} 个 |
+| 活跃仓库 | {len(active_git_repositories)} 个 |
+| 已监控仓库 | {len(data['git_repositories'])} 个 |
+| Release / Tag | {data['git_tags']} 个 |
+| 正式知识主题 | {len(compile_stats.get('targets', []))} 个 |
+| 总投入 | {data['total_hours']:.1f}h |
+| 平均专注度 | {avg_focus} |
+| 完成 / 待办 | {len(data['completed'])} / {len(data['pending'])} |
+| 本周状态 | {status_icon} |
+
+## 🎯 本周工作主线
+
+{category_highlights}
+
+### 仓库投入分布
+
+{repo_highlights}
+
+## 🚀 发布与交付
+
+{release_highlights}
+
+{_bullet_lines(data['completed'], "没有额外的结构化完成项；主要成果已从 Git 工作记录中提炼。")}
+
+> 工作主线由 Conventional Commit 的 `type(scope): message`、仓库归属和 Release/Tag 事实自动提炼，不对提交记录中不存在的业务结果进行补写。
+
+## 🧠 知识沉淀
+
+- 编译审计记录：**{compile_stats['total']}** 条
+- 新建知识卡片：**{compile_stats['created']}** 条
+- 增量更新卡片：**{compile_stats['updated']}** 条
+- 独立知识主题：**{len(compile_stats.get('targets', []))}** 个
+
+{knowledge_highlights}
+
+## 📝 日志任务与人工记录
+
+{detail}
+
+### 未完成 / 顺延
+
+{_bullet_lines(data['pending'], "本周日志中没有结构化未完成项。")}
+
+## 📈 与上周对比
+
+{comparison}
+
+## ⚠️ 风险与下周关注
+
+{attention}
+
+### 知识库健康度
+
+- 未解析链接：**{governance['broken']}**
+- 知识孤岛：**{governance['orphans']}**
+- 有未提交变更的仓库：**{data['git_dirty_repositories']}**
+
+## 🔎 Git Commit 明细（追溯）
+
+{commit_details}
+
+## 数据口径
+
+- 工作成果优先由 Git Commit、Release/Tag、Daily Log 和知识编译审计提炼。
+- Conventional Commit 会按功能、修复、安全、发布、CI、文档等工程类别自动归档。
+- 周报只陈述可验证的工作事实；不会根据提交信息推断收入、业务效果或未记录的主观结论。
+- 原始 Commit 明细保留在文末，方便从摘要追溯到具体变更。
+"""
+    review_path = f"90-AI-Workspace/reviews/{week_str}-Weekly-Review.md"
+    review_file = vault_root / review_path
+    old_version = None
+    if review_file.exists():
+        from nexusmind.core.occ import get_file_hash
+        old_version = get_file_hash(review_file.read_text(encoding="utf-8"))
+
+    res = patch_note(
+        review_path,
+        content,
+        if_match=old_version or "NEW",
+        actor="reviewer",
+        vault_root=vault_root,
+    )
+    return {
+        "status": "review_generated",
+        "week": week_str,
+        "path": review_path,
+        "daily_logs_count": len(data["daily_files"]),
+        "logged_tasks_count": len(data["tasks"]),
+        "total_hours": data["total_hours"],
+        "avg_focus": data["avg_focus"],
+        "completed_items": len(data["completed"]),
+        "pending_items": len(data["pending"]),
+        "compiled_items": compile_stats["total"],
+        "git_commits": data["git_commits"],
+        "git_tags": data["git_tags"],
+        "git_repositories": data["git_repositories"],
+        "git_active_repositories": active_git_repositories,
+        "knowledge_topics": len(compile_stats.get("targets", [])),
+        "broken_links": governance["broken"],
+        "orphans": governance["orphans"],
+        "version": res["version"],
+    }
+
+
+
+

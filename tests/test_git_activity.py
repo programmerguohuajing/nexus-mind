@@ -1,0 +1,124 @@
+﻿import subprocess
+from datetime import date
+from pathlib import Path
+
+from nexusmind.core.git_activity import (
+    discover_repositories,
+    load_workflow_config,
+    save_workflow_config,
+    sync_git_activity,
+)
+
+
+def _run(repo: Path, *args: str):
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+
+def _make_repo(root: Path, name: str) -> Path:
+    repo = root / name
+    repo.mkdir()
+    _run(repo, "init")
+    (repo / "README.md").write_text("# demo\n", encoding="utf-8")
+    _run(repo, "add", ".")
+    _run(
+        repo,
+        "-c", "user.name=Tester",
+        "-c", "user.email=tester@example.com",
+        "commit", "-m", "feat: initial commit",
+    )
+    _run(repo, "tag", "v0.1.0")
+    return repo
+
+
+def test_discover_and_sync_git_activity(tmp_path):
+    workspace = tmp_path / "workspace"
+    vault = tmp_path / "vault"
+    workspace.mkdir()
+    vault.mkdir()
+    repo = _make_repo(workspace, "demo-repo")
+
+    repos = discover_repositories([workspace])
+    assert repos == [repo]
+
+    first = sync_git_activity(day=date.today(), roots=[workspace], vault_root=vault)
+    assert first["repository_count"] == 1
+    assert first["commit_count"] == 1
+    assert first["tag_count"] == 1
+
+    daily = vault / first["daily_log"]
+    assert daily.exists()
+    text = daily.read_text(encoding="utf-8")
+    assert "Git 工作活动（自动采集）" in text
+    assert "demo-repo" in text
+    assert "feat: initial commit" in text
+    assert "v0.1.0" in text
+    assert text.count("nexusmind:git-activity:start") == 1
+
+    second = sync_git_activity(day=date.today(), roots=[workspace], vault_root=vault)
+    text2 = daily.read_text(encoding="utf-8")
+    assert second["commit_count"] == 1
+    assert text2.count("nexusmind:git-activity:start") == 1
+
+    project_note = vault / "20-Projects/Repositories/demo-repo/Repository-Activity.md"
+    assert project_note.exists()
+    assert "feat: initial commit" in project_note.read_text(encoding="utf-8")
+
+
+def test_empty_config_scans_nothing(tmp_path, monkeypatch):
+    config_path = tmp_path / "workflow-config.json"
+    monkeypatch.setattr("nexusmind.core.git_activity.WORKFLOW_CONFIG_PATH", config_path)
+    workspace = tmp_path / "workspace"
+    vault = tmp_path / "vault"
+    workspace.mkdir()
+    vault.mkdir()
+    _make_repo(workspace, "repo-a")
+
+    assert load_workflow_config() == {"targets": []}
+    result = sync_git_activity(vault_root=vault)
+    assert result["configured"] is False
+    assert result["repository_count"] == 0
+    assert result["daily_log"] is None
+    assert not (vault / "30-Logs").exists()
+
+
+def test_exact_repository_config_only_collects_selected_repo(tmp_path, monkeypatch):
+    config_path = tmp_path / "workflow-config.json"
+    monkeypatch.setattr("nexusmind.core.git_activity.WORKFLOW_CONFIG_PATH", config_path)
+    workspace = tmp_path / "workspace"
+    vault = tmp_path / "vault"
+    workspace.mkdir()
+    vault.mkdir()
+    repo_a = _make_repo(workspace, "repo-a")
+    _make_repo(workspace, "repo-b")
+
+    saved = save_workflow_config([
+        {"type": "repository", "path": str(repo_a), "enabled": True}
+    ])
+    assert len(saved["targets"]) == 1
+
+    result = sync_git_activity(vault_root=vault)
+    assert result["configured"] is True
+    assert result["repository_count"] == 1
+    assert result["repositories"][0]["name"] == "repo-a"
+
+
+def test_directory_target_can_be_git_repository_itself(tmp_path):
+    workspace = tmp_path / "workspace"
+    vault = tmp_path / "vault"
+    workspace.mkdir()
+    vault.mkdir()
+    repo = _make_repo(workspace, "repo-self")
+
+    result = sync_git_activity(
+        day=date.today(),
+        targets=[{"type": "directory", "path": str(repo), "enabled": True}],
+        vault_root=vault,
+    )
+    assert result["repository_count"] == 1
+    assert result["repositories"][0]["name"] == "repo-self"

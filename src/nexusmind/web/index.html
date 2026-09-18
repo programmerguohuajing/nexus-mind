@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NexusMind · 知识库管理台</title>
+  <link rel="stylesheet" href="/web/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">N</div>
+        <div><strong>NexusMind</strong><span>知识库管理</span></div>
+      </div>
+      <nav id="nav">
+        <button class="nav-item active" data-view="dashboard">总览</button>
+        <button class="nav-item" data-view="search">知识搜索</button>
+        <button class="nav-item" data-view="graph">知识图谱</button>
+        <button class="nav-item" data-view="ingest">资料入库</button>
+        <button class="nav-item" data-view="compile">编译队列</button>
+        <button class="nav-item" data-view="governance">知识治理</button>
+        <button class="nav-item" data-view="workflow">工作流</button>
+        <button class="nav-item" data-view="review">周复盘</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="serviceDot" class="dot"></span>
+        <span id="serviceText">正在连接服务…</span>
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">NEXUSMIND / VAULT</p>
+          <h1 id="pageTitle">知识库总览</h1>
+        </div>
+        <div class="top-actions">
+          <button class="btn ghost" id="refreshBtn">刷新</button>
+          <a class="btn" href="/docs" target="_blank">API 文档</a>
+        </div>
+      </header>
+      <section id="app" class="content"></section>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/web/app.js"></script>
+</body>
+</html>
