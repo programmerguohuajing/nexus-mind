@@ -109,7 +109,6 @@ jobs:
           test -f NexusMindAgent-Linux-x64
           test -f NexusMindAgent-macOS-Intel-x64.dmg
           test -f NexusMindAgent-macOS-AppleSilicon-arm64.dmg
-          sha256sum NexusMindAgent-* > SHA256SUMS.txt
           ls -lh
 
       - name: Create GitHub Release
@@ -121,7 +120,7 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           TITLE="NexusMind ${TAG#v}"
-          NOTES=$'NexusMind '"${TAG#v}"$'\n\nAgent downloads:\n- Windows x64: NexusMindAgent-Windows-x64.exe\n- Linux x64: NexusMindAgent-Linux-x64\n- macOS Intel x64: NexusMindAgent-macOS-Intel-x64.dmg\n- macOS Apple Silicon (M-series) arm64: NexusMindAgent-macOS-AppleSilicon-arm64.dmg\n\nSHA256SUMS.txt contains checksums for all platform assets.'
+          NOTES=$'NexusMind '"${TAG#v}"$'\n\nAgent downloads:\n- Windows x64: NexusMindAgent-Windows-x64.exe\n- Linux x64: NexusMindAgent-Linux-x64\n- macOS Intel x64: NexusMindAgent-macOS-Intel-x64.dmg\n- macOS Apple Silicon (M-series) arm64: NexusMindAgent-macOS-AppleSilicon-arm64.dmg'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             while IFS= read -r asset; do
