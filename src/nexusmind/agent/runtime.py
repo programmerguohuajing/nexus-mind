@@ -16,6 +16,7 @@ from nexusmind.agent.configuration import (
     api_service_command,
 )
 from nexusmind.core.git_activity import sync_git_activity
+from nexusmind.core.vault_sync import sync_vault_bidirectional
 
 
 @dataclass
@@ -26,7 +27,15 @@ class AgentStatus:
     repository_count: int = 0
     commit_count: int = 0
     cloud_delivered: bool = False
+    cloud_state: str = "unconfigured"
+    cloud_message: str = ""
+    cloud_last_sync: str = ""
     api_running: bool = False
+    sync_in_progress: bool = False
+    sync_uploaded: int = 0
+    sync_downloaded: int = 0
+    sync_deleted: int = 0
+    sync_conflicts: int = 0
 
 
 StatusCallback = Callable[[AgentStatus], None]
@@ -97,7 +106,7 @@ class AgentSupervisor:
                     name="nexusmind-agent-config-watch",
                 )
                 self._watcher.start()
-            self._emit(state="running", message="Agent running")
+            self._emit(state="running", message="Agent 正在运行")
 
 
     def stop(self) -> None:
@@ -113,7 +122,7 @@ class AgentSupervisor:
             watcher.join(timeout=3)
         self._watcher = None
         self._stop_api()
-        self._emit(state="stopped", message="Agent stopped", api_running=False)
+        self._emit(state="stopped", message="Agent 已停止", api_running=False)
 
     def apply(self, config: AgentConfig, save: bool = True) -> AgentConfig:
         with self._lock:
@@ -142,6 +151,17 @@ class AgentSupervisor:
         return self.apply(self.store.load(), save=False)
 
     def sync_now(self) -> None:
+        if self.status.sync_in_progress:
+            return
+        cloud_ready = bool(self.config.cloud_url and self.config.cloud_token)
+        self._emit(
+            sync_in_progress=True,
+            cloud_state="syncing" if cloud_ready else (
+                "incomplete" if self.config.cloud_url else "unconfigured"
+            ),
+            cloud_message="正在同步云端数据…" if cloud_ready else "",
+            message="已请求立即同步",
+        )
         self._sync_now.set()
 
     def _restart_runtime(self) -> None:
@@ -159,7 +179,7 @@ class AgentSupervisor:
             name="nexusmind-agent-sync",
         )
         self._worker.start()
-        self._emit(state="running", message="Configuration reloaded")
+        self._emit(state="running", message="配置已重新加载")
 
     def _start_api(self) -> None:
         if not self.config.local_api_enabled:
@@ -179,10 +199,7 @@ class AgentSupervisor:
         if self._api_process.poll() is not None:
             self._emit(
                 api_running=False,
-                message=(
-                    "Local API failed to start. "
-                    "Check whether the configured port is already in use."
-                ),
+                message="本地 API 启动失败，请检查配置的端口是否已被占用。",
             )
             self._api_process = None
             return
@@ -208,19 +225,19 @@ class AgentSupervisor:
             self._sync_now.clear()
 
     def _run_once(self) -> None:
+        self._emit(
+            sync_in_progress=True,
+            message="正在采集 Git 活动并同步知识库…",
+            sync_uploaded=0,
+            sync_downloaded=0,
+            sync_deleted=0,
+            sync_conflicts=0,
+        )
         folders = [
             {"type": "directory", "path": path, "enabled": True}
             for path in self.config.folders
             if Path(path).is_dir()
         ]
-        if not folders:
-            self._emit(
-                state="running",
-                message="No Git collection folders configured",
-                repository_count=0,
-                commit_count=0,
-            )
-            return
         try:
             env = runtime_environment(self.config)
             os.environ.update({
@@ -230,21 +247,117 @@ class AgentSupervisor:
                     "NEXUSMIND_CLOUD_SYNC_TOKEN",
                 )
             })
-            result = sync_git_activity(
-                targets=folders,
-                vault_root=Path(self.config.data_root) / "vault",
+            vault_root = Path(self.config.data_root) / "vault"
+            if folders:
+                result = sync_git_activity(targets=folders, vault_root=vault_root)
+            else:
+                result = {"repository_count": 0, "commit_count": 0, "cloud_sync": {}}
+
+            vault_sync = sync_vault_bidirectional(
+                vault_root=vault_root,
+                data_root=Path(self.config.data_root),
+                cloud_url=self.config.cloud_url,
+                cloud_token=self.config.cloud_token,
             )
-            cloud = result.get("cloud_sync") or {}
+            git_cloud = result.get("cloud_sync") or {}
+            cloud_url_set = bool(self.config.cloud_url.strip())
+            cloud_ready = bool(
+                self.config.cloud_url.strip() and self.config.cloud_token.strip()
+            )
+            vault_ok = bool(vault_sync.get("success"))
+            git_attempted = bool(git_cloud.get("enabled"))
+            git_ok = bool(git_cloud.get("delivered"))
+            now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if not cloud_url_set:
+                cloud_state = "unconfigured"
+                cloud_message = "未配置 Cloud API"
+                cloud_ok = False
+            elif not cloud_ready:
+                cloud_state = "incomplete"
+                cloud_message = "Cloud API 已填写，但缺少 Sync Token"
+                cloud_ok = False
+            elif vault_ok and (not git_attempted or git_ok):
+                cloud_state = "synced"
+                cloud_message = "云端数据同步成功"
+                cloud_ok = True
+            elif vault_ok or git_ok:
+                cloud_state = "partial"
+                cloud_message = (
+                    "部分云端数据同步成功；"
+                    + (
+                        f"Git 事件同步失败：{git_cloud.get('error', '未知错误')}"
+                        if vault_ok and git_attempted and not git_ok
+                        else f"知识库同步失败：{vault_sync.get('error', '未知错误')}"
+                    )
+                )
+                cloud_ok = True
+            else:
+                cloud_state = "error"
+                cloud_message = (
+                    vault_sync.get("error")
+                    or git_cloud.get("error")
+                    or "云端同步失败"
+                )
+                cloud_ok = False
+
+            if vault_sync.get("enabled") and not vault_sync.get("success"):
+                message = f"知识库同步失败：{vault_sync.get('error', '未知错误')}"
+                state = "error" if cloud_state == "error" else "running"
+            elif vault_sync.get("enabled"):
+                message = (
+                    f"同步完成：上传 {vault_sync.get('uploaded', 0)}，"
+                    f"下载 {vault_sync.get('downloaded', 0)}，"
+                    f"删除 {vault_sync.get('deleted', 0)}，"
+                    f"冲突 {vault_sync.get('conflicts', 0)}"
+                )
+                if vault_sync.get("conflicts"):
+                    message += f"（冲突副本：{Path(self.config.data_root) / 'sync-conflicts'}）"
+                state = "running"
+            elif folders:
+                message = (
+                    "Git 活动采集完成；"
+                    + (
+                        cloud_message
+                        if cloud_state in {"incomplete", "error", "partial"}
+                        else "云端知识库同步未配置"
+                    )
+                )
+                state = "running"
+            else:
+                message = "尚未配置 Git 采集目录或云端同步"
+                state = "running"
+
             self._emit(
-                state="running",
-                message="Sync completed",
-                last_sync=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                state=state,
+                message=message,
+                last_sync=now_text,
                 repository_count=result.get("repository_count", 0),
                 commit_count=result.get("commit_count", 0),
-                cloud_delivered=bool(cloud.get("delivered")),
+                cloud_delivered=cloud_ok,
+                cloud_state=cloud_state,
+                cloud_message=cloud_message,
+                cloud_last_sync=now_text if cloud_state in {"synced", "partial"} else self.status.cloud_last_sync,
+                sync_in_progress=False,
+                sync_uploaded=int(vault_sync.get("uploaded", 0)),
+                sync_downloaded=int(vault_sync.get("downloaded", 0)),
+                sync_deleted=int(vault_sync.get("deleted", 0)),
+                sync_conflicts=int(vault_sync.get("conflicts", 0)),
             )
         except Exception as exc:
-            self._emit(state="error", message=str(exc))
+            if self.config.cloud_url.strip() and self.config.cloud_token.strip():
+                cloud_state = "error"
+            elif self.config.cloud_url.strip():
+                cloud_state = "incomplete"
+            else:
+                cloud_state = "unconfigured"
+            self._emit(
+                state="error",
+                message=str(exc),
+                cloud_state=cloud_state,
+                cloud_message=str(exc) if cloud_state == "error" else "",
+                sync_in_progress=False,
+            )
 
     def _watch_config(self) -> None:
         while not self._shutdown.is_set():
@@ -255,4 +368,4 @@ class AgentSupervisor:
                 try:
                     self.reload()
                 except Exception as exc:
-                    self._emit(state="error", message=f"Config reload failed: {exc}")
+                    self._emit(state="error", message=f"配置重新加载失败：{exc}")

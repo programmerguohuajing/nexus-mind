@@ -150,7 +150,7 @@ The `nexusmind-data` volume persists `/data`. To collect Git repositories from D
 
 ### Cloudflare Workers
 
-Cloud mode uses **Python Workers + FastAPI + D1 + R2**. A Worker does not browse your computer or execute local `git`; the Local Agent collects complete Git history and pushes structured events to the Worker over HTTPS. Cloud weekly reviews then filter those events by each repository's effective `user.email`.
+Cloud mode uses **Python Workers + FastAPI + D1 + R2**. A Worker does not browse your computer or execute local `git`; the Local Agent collects complete Git history and performs incremental two-way knowledge-base synchronization over HTTPS. Text knowledge files synchronize bidirectionally between the local Vault and D1 with create, update, delete, version checks, and conflict protection, while Git activity remains a structured event stream in D1. Cloud weekly reviews filter Git events by each repository's effective `user.email`.
 
 Cloudflare deployment requires Python 3.13+, Node.js/npm, and `uv >= 0.12.3`:
 
@@ -169,7 +169,7 @@ uv sync --group cloudflare
 uv run --group cloudflare pywrangler deploy
 ```
 
-Configure the Local Agent to replicate Git events:
+Configure the Local Agent for two-way knowledge-base and Git activity synchronization:
 
 ```text
 NEXUSMIND_CLOUD_SYNC_URL=https://<worker>.workers.dev

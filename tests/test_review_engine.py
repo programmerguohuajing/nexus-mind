@@ -145,6 +145,13 @@ def test_review_extracts_commit_themes_and_release(tmp_path):
     assert "**版本发布**" in review
     assert "v0.8.1" in review
     assert "新增 React Native 会话回放" in review
+    assert "## 🔎 Git Commit 明细" not in review
+    assert "`aaaaaaa`" not in review
+    assert "`bbbbbbb`" not in review
+    assert "围绕 **" in review
+    assert "sdk-rn" in review
+    assert "security" in review
+    assert "workflow" in review
 
 
 def test_review_filters_other_authors_from_collected_git_log(tmp_path):
@@ -176,5 +183,45 @@ def test_review_filters_other_authors_from_collected_git_log(tmp_path):
     assert "my feature" in review
     assert "my fix" in review
     assert "teammate feature" not in review
+    assert "`aaaaaaa`" not in review
+    assert "`bbbbbbb`" not in review
     assert "v-mine" in review
     assert "v-team" not in review
+
+
+def test_review_can_include_all_users_from_collected_git_log(tmp_path):
+    _seed(tmp_path)
+    _write_daily(tmp_path, "2026-09-18", 1.0, 8, True)
+    daily = tmp_path / "30-Logs/Daily/2026-09-18.md"
+    text = daily.read_text(encoding="utf-8")
+    text += """
+<!-- nexusmind:git-activity:start -->
+## Git 工作活动（自动采集）
+### team-repo
+- 当前仓库用户：Tester <tester@example.com>
+- 今日全部用户提交：3 个；Merge/PR 线索：0 个；Tag：2 个
+- 工作区：干净（0 个文件）
+  - aaaaaaa feat: my feature — Tester <tester@example.com>
+  - bbbbbbb fix: my fix — Tester <tester@example.com>
+  - ccccccc feat: teammate feature — Teammate <teammate@example.com>
+  - Release/Tag：v-mine — target-author <tester@example.com>
+  - Release/Tag：v-team — target-author <teammate@example.com>
+<!-- nexusmind:git-activity:end -->
+"""
+    daily.write_text(text, encoding="utf-8")
+
+    result = generate_weekly_review(
+        "2026-W38",
+        vault_root=tmp_path,
+        author_scope="all_users",
+    )
+    assert result["author_scope"] == "all_users"
+    assert result["git_commits"] == 3
+    assert result["git_tags"] == 2
+    review = (tmp_path / result["path"]).read_text(encoding="utf-8")
+    assert "Git 统计口径：所有用户" in review
+    assert "teammate feature" in review
+    assert "v-team" in review
+    assert "`aaaaaaa`" not in review
+    assert "`ccccccc`" not in review
+    assert "原始 Git Commit 仅作为内部证据源参与聚合" in review

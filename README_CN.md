@@ -148,7 +148,7 @@ docker compose up -d --build
 
 ### Cloudflare Workers
 
-Cloudflare 模式使用 **Python Worker + FastAPI + D1 + R2**。Worker 不直接访问用户电脑文件系统，也不执行本机 `git`；本地 NexusMind 作为 Local Agent 负责采集完整 Git Log，再通过 HTTPS 同步到 Worker。云端周复盘只使用各仓库当前 `user.email` 对应的本人提交。
+Cloudflare 模式使用 **Python Worker + FastAPI + D1 + R2**。Worker 不直接访问用户电脑文件系统，也不执行本机 `git`；本地 NexusMind 作为 Local Agent 负责采集完整 Git Log，并通过 HTTPS 与云端执行知识库双向增量同步。文本知识文件在本地 Vault 与 D1 之间双向同步，支持新增、修改、删除、版本校验和冲突保护；Git 活动仍作为结构化事件同步到 D1。云端周复盘只使用各仓库当前 `user.email` 对应的本人提交。
 
 Cloudflare 部署要求 Python 3.13+、Node.js/npm 和 `uv >= 0.12.3`：
 
@@ -167,7 +167,7 @@ uv sync --group cloudflare
 uv run --group cloudflare pywrangler deploy
 ```
 
-本地 Agent 配置云端同步：
+本地 Agent 配置双向知识库与 Git 活动同步：
 
 ```text
 NEXUSMIND_CLOUD_SYNC_URL=https://<worker>.workers.dev

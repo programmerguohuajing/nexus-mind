@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,7 @@ from nexusmind.core.git_activity import (
     sync_git_activity,
 )
 from nexusmind.core.ingest import ingest_article
+from nexusmind.core.web_ingest import fetch_web_page
 from nexusmind.core.occ import get_file_hash
 from nexusmind.core.review import generate_weekly_review
 from nexusmind.core.search import search_notes
@@ -87,8 +89,15 @@ class IngestRequest(BaseModel):
     folder: str = "60-References/Articles"
 
 
+class WebIngestRequest(BaseModel):
+    url: str
+    author: str = "Unknown"
+    folder: str = "60-References/Articles"
+
+
 class ReviewRequest(BaseModel):
     week: Optional[str] = None
+    author_scope: str = "current_user"
 
 
 class WorkflowTarget(BaseModel):
@@ -108,7 +117,11 @@ def web_console():
 
 @app.get("/styles.css", include_in_schema=False)
 def web_styles():
-    return FileResponse(WEB_DIR / "styles.css", media_type="text/css")
+    return FileResponse(
+        WEB_DIR / "styles.css",
+        media_type="text/css",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/app.js", include_in_schema=False)
@@ -116,6 +129,16 @@ def web_app_js():
     return FileResponse(
         WEB_DIR / "app.js",
         media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/ui.js", include_in_schema=False)
+def web_ui_js():
+    return FileResponse(
+        WEB_DIR / "ui.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 
 
@@ -124,6 +147,7 @@ def web_favicon():
     return FileResponse(
         WEB_DIR / "favicon.ico",
         media_type="image/x-icon",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 
 
@@ -596,6 +620,22 @@ async def upload_files(
     }
 
 
+@app.post("/api/web-ingest")
+def web_ingest_endpoint(req: WebIngestRequest):
+    try:
+        page = fetch_web_page(req.url, allow_private=True)
+        result = ingest_article(
+            title=page["title"],
+            content=page["content"],
+            author=req.author,
+            url=page["url"],
+            folder=req.folder,
+        )
+        return {**result, "source_url": page["url"], "characters": page["characters"]}
+    except (ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/mcp/vault_ingest")
 def vault_ingest_endpoint(req: IngestRequest):
     try:
@@ -613,7 +653,7 @@ def vault_ingest_endpoint(req: IngestRequest):
 @app.post("/mcp/vault_weekly_review")
 def vault_weekly_review_endpoint(req: ReviewRequest):
     try:
-        return generate_weekly_review(week_str=req.week)
+        return generate_weekly_review(week_str=req.week, author_scope=req.author_scope)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

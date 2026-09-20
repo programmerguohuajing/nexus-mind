@@ -4,16 +4,17 @@ const toastEl = document.getElementById("toast");
 const serviceDot = document.getElementById("serviceDot");
 const serviceText = document.getElementById("serviceText");
 const state = { view: "dashboard", selectedNote: null, uploadFiles: [], runtime: null };
+const t = (key, params) => window.NexusUI?.t(key, params) ?? key;
 
-const titles = {
-  dashboard: "知识库总览",
-  search: "知识搜索",
-  graph: "知识图谱",
-  ingest: "资料入库",
-  compile: "编译队列",
-  governance: "知识治理",
-  workflow: "工作流",
-  review: "周复盘"
+const titleKeys = {
+  dashboard: "dashboard.title",
+  search: "nav.search",
+  graph: "nav.graph",
+  ingest: "nav.ingest",
+  compile: "nav.compile",
+  governance: "nav.governance",
+  workflow: "nav.workflow",
+  review: "nav.review"
 };
 
 const esc = (value = "") => String(value)
@@ -49,14 +50,16 @@ function setLoading(active) {
 }
 
 function statsHtml(data) {
-  return [
-    '<div class="grid stats">',
-    '<div class="card"><div class="stat-label">全部 Markdown</div><div class="stat-value">' + data.notes + '</div><div class="stat-note">Vault 内容规模</div></div>',
-    '<div class="card"><div class="stat-label">正式知识卡片</div><div class="stat-value">' + data.domain_notes + '</div><div class="stat-note">40-Domain 编译层</div></div>',
-    '<div class="card"><div class="stat-label">Raw 原始资料</div><div class="stat-value">' + data.raw_sources + '</div><div class="stat-note">60-References 只读层</div></div>',
-    '<div class="card"><div class="stat-label">待编译</div><div class="stat-value">' + data.pending_compile + '</div><div class="stat-note">' + (data.pending_compile ? '等待增量编译' : '队列已清空') + '</div></div>',
-    '</div>'
-  ].join("");
+  const caps = state.runtime?.capabilities || {};
+  const cards = [
+    '<div class="card"><div class="stat-label">' + t("dashboard.allMarkdown") + '</div><div class="stat-value">' + data.notes + '</div><div class="stat-note">' + t("dashboard.vaultSize") + '</div></div>',
+    '<div class="card"><div class="stat-label">' + t("dashboard.domainNotes") + '</div><div class="stat-value">' + data.domain_notes + '</div><div class="stat-note">' + t("dashboard.domainLayer") + '</div></div>',
+    '<div class="card"><div class="stat-label">' + t("dashboard.rawSources") + '</div><div class="stat-value">' + data.raw_sources + '</div><div class="stat-note">' + t("dashboard.rawLayer") + '</div></div>'
+  ];
+  if (caps.knowledge_compile !== false) {
+    cards.push('<div class="card"><div class="stat-label">' + t("dashboard.pending") + '</div><div class="stat-value">' + data.pending_compile + '</div><div class="stat-note">' + (data.pending_compile ? t("dashboard.pendingWait") : t("dashboard.queueEmpty")) + '</div></div>');
+  }
+  return '<div class="grid stats">' + cards.join("") + '</div>';
 }
 
 async function renderDashboard() {
@@ -65,29 +68,39 @@ async function renderDashboard() {
     const data = await api("/api/dashboard");
     const recent = data.recent_compilations.length
       ? data.recent_compilations.map(function(x) {
-          return '<div class="list-item"><div><strong>' + esc(x) + '</strong><p>编译审计记录</p></div><span class="badge ok">已完成</span></div>';
+          return '<div class="list-item"><div><strong>' + esc(x) + '</strong><p>' + t("dashboard.compileAudit") + '</p></div><span class="badge ok">' + t("dashboard.completed") + '</span></div>';
         }).join("")
-      : '<div class="empty">暂无编译记录</div>';
+      : '<div class="empty">' + t("dashboard.noCompile") + '</div>';
 
-    app.innerHTML = statsHtml(data)
-      + '<div class="section-title"><h2>知识健康度</h2><span class="muted">实时扫描</span></div>'
-      + '<div class="grid two">'
-      + '<div class="card"><h3>治理状态</h3>'
-      + '<div class="metric-line"><span class="muted">未解析链接</span><strong>' + data.broken_links + '</strong></div>'
-      + '<div class="metric-line"><span class="muted">知识孤岛</span><strong>' + data.orphans + '</strong></div>'
-      + '<div class="metric-line"><span class="muted">服务版本</span><strong>v' + esc(data.version) + '</strong></div>'
-      + '<div class="metric-line"><span class="muted">Vault</span><span class="path">' + esc(data.vault) + '</span></div>'
-      + '<div class="actions" style="margin-top:14px"><button class="btn ghost" onclick="switchView(\'governance\')">进入知识治理</button><button class="btn ghost" onclick="switchView(\'compile\')">查看编译队列</button></div></div>'
-      + '<div class="card"><h3>最近知识编译</h3><div class="list">' + recent + '</div></div></div>'
-      + '<div class="section-title"><h2>快捷操作</h2><span class="muted">常用入口</span></div>'
-      + '<div class="card"><div class="actions">'
-      + '<button class="btn ghost" onclick="switchView(\'search\')">搜索知识</button>'
-      + '<button class="btn ghost" onclick="switchView(\'ingest\')">导入资料</button>'
-      + '<button class="btn ghost" onclick="runCompile()">执行增量编译</button>'
-      + '<button class="btn ghost" onclick="switchView(\'review\')">生成周复盘</button>'
-      + '</div></div>';
+    const caps = state.runtime?.capabilities || {};
+    let sections = statsHtml(data);
+    if (caps.governance !== false || caps.knowledge_compile !== false) {
+      sections += '<div class="section-title"><h2>' + t("dashboard.health") + '</h2><span class="muted">' + t("dashboard.realtime") + '</span></div><div class="grid two">';
+      if (caps.governance !== false) {
+        sections += '<div class="card"><h3>' + t("dashboard.governance") + '</h3>'
+          + '<div class="metric-line"><span class="muted">' + t("dashboard.broken") + '</span><strong>' + data.broken_links + '</strong></div>'
+          + '<div class="metric-line"><span class="muted">' + t("dashboard.orphans") + '</span><strong>' + data.orphans + '</strong></div>'
+          + '<div class="metric-line"><span class="muted">' + t("dashboard.version") + '</span><strong>v' + esc(data.version) + '</strong></div>'
+          + '<div class="metric-line"><span class="muted">Vault</span><span class="path">' + esc(data.vault) + '</span></div>'
+          + '<div class="actions" style="margin-top:14px"><button class="btn ghost" onclick="switchView(\'governance\')">' + t("dashboard.enterGovernance") + '</button></div></div>';
+      }
+      if (caps.knowledge_compile !== false) {
+        sections += '<div class="card"><h3>' + t("dashboard.recentCompile") + '</h3><div class="list">' + recent + '</div>'
+          + '<div class="actions" style="margin-top:14px"><button class="btn ghost" onclick="switchView(\'compile\')">' + t("dashboard.compileQueue") + '</button></div></div>';
+      }
+      sections += '</div>';
+    }
+    const quickActions = [
+      '<button class="btn ghost" onclick="switchView(\'search\')">' + t("dashboard.search") + '</button>',
+      caps.uploads === false ? '' : '<button class="btn ghost" onclick="switchView(\'ingest\')">' + t("dashboard.ingest") + '</button>',
+      caps.knowledge_compile === false ? '' : '<button class="btn ghost" onclick="runCompile()">' + t("dashboard.compile") + '</button>',
+      caps.weekly_review === false ? '' : '<button class="btn ghost" onclick="switchView(\'review\')">' + t("dashboard.review") + '</button>'
+    ].join("");
+    app.innerHTML = sections
+      + '<div class="section-title"><h2>' + t("dashboard.quick") + '</h2><span class="muted">' + t("dashboard.common") + '</span></div>'
+      + '<div class="card"><div class="actions">' + quickActions + '</div></div>';
   } catch (e) {
-    app.innerHTML = '<div class="empty">加载总览失败：' + esc(e.message) + '</div>';
+    app.innerHTML = '<div class="empty">' + esc(t("dashboard.loadFailed", { error: e.message })) + '</div>';
   } finally {
     setLoading(false);
   }
@@ -250,12 +263,12 @@ async function openWikiLink(target) {
   try {
     const data = await api("/api/resolve-link?target=" + encodeURIComponent(target));
     if (data.status === "ambiguous") {
-      toast("链接存在多个候选：" + data.matches.length + " 个", true);
+      toast(t("search.ambiguous", { count: data.matches.length }), true);
       return;
     }
     await navigateToNote(data.path);
   } catch (e) {
-    toast("无法打开链接：" + target, true);
+    toast(t("search.openFailed", { target }), true);
   }
 }
 
@@ -268,30 +281,30 @@ async function navigateToNote(path) {
 
 function searchTemplate() {
   return '<div class="toolbar">'
-    + '<input id="searchQuery" class="input" placeholder="搜索知识、概念、关键词…" />'
+    + '<input id="searchQuery" class="input" placeholder="' + esc(t("search.placeholder")) + '" />'
     + '<select id="searchFolder" class="select">'
-    + '<option value="40-Domain">正式知识</option><option value="">全库</option>'
-    + '<option value="20-Projects">项目</option><option value="30-Logs">日志</option>'
-    + '<option value="60-References">Raw 资料</option></select>'
-    + '<button class="btn" onclick="runSearch()">搜索</button></div>'
-    + '<div class="split"><div class="card"><h3>搜索结果</h3>'
-    + '<div id="searchResults" class="list"><div class="empty">输入关键词开始检索</div></div></div>'
-    + '<div class="card viewer"><h3>知识卡片</h3>'
-    + '<div id="noteViewer" class="empty">选择左侧结果查看完整内容</div></div></div>';
+    + '<option value="40-Domain">' + t("search.domain") + '</option><option value="">' + t("search.all") + '</option>'
+    + '<option value="20-Projects">' + t("search.projects") + '</option><option value="30-Logs">' + t("search.logs") + '</option>'
+    + '<option value="60-References">' + t("search.raw") + '</option></select>'
+    + '<button class="btn" onclick="runSearch()">' + t("search.action") + '</button></div>'
+    + '<div class="split"><div class="card"><h3>' + t("search.results") + '</h3>'
+    + '<div id="searchResults" class="list"><div class="empty">' + t("search.start") + '</div></div></div>'
+    + '<div class="card viewer"><h3>' + t("search.note") + '</h3>'
+    + '<div id="noteViewer" class="empty">' + t("search.select") + '</div></div></div>';
 }
 
 async function runSearch() {
   const query = document.getElementById("searchQuery").value.trim();
   const folder = document.getElementById("searchFolder").value || null;
   const resultsEl = document.getElementById("searchResults");
-  resultsEl.innerHTML = '<div class="empty">检索中…</div>';
+  resultsEl.innerHTML = '<div class="empty">' + t("search.searching") + '</div>';
   try {
     const data = await api("/mcp/vault_search", {
       method: "POST",
       body: JSON.stringify({ query: query, folder: folder, limit: 50 })
     });
     if (!data.matches.length) {
-      resultsEl.innerHTML = '<div class="empty">没有找到匹配知识</div>';
+      resultsEl.innerHTML = '<div class="empty">' + t("search.empty") + '</div>';
       return;
     }
     resultsEl.innerHTML = data.matches.map(function(item) {
@@ -309,14 +322,14 @@ async function runSearch() {
       el.addEventListener("click", function() { openNote(el.dataset.path); });
     });
   } catch (e) {
-    resultsEl.innerHTML = '<div class="empty">搜索失败：' + esc(e.message) + '</div>';
+    resultsEl.innerHTML = '<div class="empty">' + esc(t("search.failed", { error: e.message })) + '</div>';
   }
 }
 
 async function openNote(path) {
   const viewer = document.getElementById("noteViewer");
   if (!viewer) return;
-  viewer.innerHTML = '<div class="empty">正在读取…</div>';
+  viewer.innerHTML = '<div class="empty">' + t("search.reading") + '</div>';
   try {
     const data = await api("/mcp/vault_read", {
       method: "POST",
@@ -347,6 +360,7 @@ async function openNote(path) {
 function ingestTemplate() {
   return '<div class="card ingest-card">'
     + '<div class="tabs"><button id="fileTab" class="tab active" onclick="selectIngestMode(\'file\')">本地文件</button>'
+    + '<button id="webTab" class="tab" onclick="selectIngestMode(\'web\')">在线链接</button>'
     + '<button id="textTab" class="tab" onclick="selectIngestMode(\'text\')">粘贴文本</button></div>'
     + '<div id="fileIngestPanel">'
     + '<div id="uploadZone" class="upload-zone" onclick="document.getElementById(\'fileInput\').click()" '
@@ -362,6 +376,12 @@ function ingestTemplate() {
     + '<div id="uploadResult"></div>'
     + '<div class="section-title"><h2>已入库资料</h2><div class="actions"><button class="btn ghost" onclick="loadReferences()">刷新</button></div></div>'
     + '<div id="referenceList" class="card reference-list"><div class="empty">正在读取资料库…</div></div></div>'
+    + '<div id="webIngestPanel" hidden>'
+    + '<div class="web-ingest-intro"><strong>从在线链接提取网页正文</strong><p class="muted">NexusMind 会抓取网页、识别标题并提取主要文本内容，然后写入 Raw 层。本地 Agent 模式支持 localhost 和局域网地址；远端服务模式支持公网 HTTP/HTTPS 网页。</p></div>'
+    + '<div class="form-grid"><div class="form-group full"><label>网页链接</label><input id="webIngestUrl" class="input" placeholder="https://example.com/article" /></div>'
+    + '<div class="form-group"><label>作者（可选）</label><input id="webIngestAuthor" class="input" placeholder="Unknown" /></div></div>'
+    + '<div class="actions" style="margin-top:12px"><button id="webIngestButton" class="btn" onclick="submitWebIngest()">抓取并入库</button></div>'
+    + '<div id="webIngestResult"></div></div>'
     + '<div id="textIngestPanel" hidden>'
     + '<div class="form-grid"><div class="form-group"><label>标题</label><input id="ingestTitle" class="input" placeholder="资料标题" /></div>'
     + '<div class="form-group"><label>作者</label><input id="ingestAuthor" class="input" placeholder="Unknown" /></div>'
@@ -372,10 +392,14 @@ function ingestTemplate() {
 
 function selectIngestMode(mode) {
   const isFile = mode === "file";
+  const isWeb = mode === "web";
+  const isText = mode === "text";
   document.getElementById("fileIngestPanel").hidden = !isFile;
-  document.getElementById("textIngestPanel").hidden = isFile;
+  document.getElementById("webIngestPanel").hidden = !isWeb;
+  document.getElementById("textIngestPanel").hidden = !isText;
   document.getElementById("fileTab").classList.toggle("active", isFile);
-  document.getElementById("textTab").classList.toggle("active", !isFile);
+  document.getElementById("webTab").classList.toggle("active", isWeb);
+  document.getElementById("textTab").classList.toggle("active", isText);
 }
 
 function formatFileSize(bytes) {
@@ -474,6 +498,36 @@ async function uploadSelectedFiles() {
   } finally {
     button.textContent = "开始入库";
     button.disabled = state.uploadFiles.length === 0;
+  }
+}
+
+async function submitWebIngest() {
+  const url = document.getElementById("webIngestUrl").value.trim();
+  const author = document.getElementById("webIngestAuthor").value.trim() || "Unknown";
+  const button = document.getElementById("webIngestButton");
+  const resultEl = document.getElementById("webIngestResult");
+  if (!url) return toast("请输入网页链接", true);
+
+  button.disabled = true;
+  button.textContent = "正在抓取…";
+  resultEl.innerHTML = '<div class="empty">正在抓取并提取网页正文…</div>';
+  try {
+    const result = await api("/api/web-ingest", {
+      method: "POST",
+      body: JSON.stringify({ url: url, author: author })
+    });
+    resultEl.innerHTML = '<div class="upload-summary">网页已入库</div>'
+      + '<div class="list"><div class="list-item"><div><strong>' + esc(result.title || "网页资料") + '</strong>'
+      + '<p>' + esc(result.path) + ' · ' + esc(String(result.characters || 0)) + ' 字符</p></div>'
+      + '<span class="badge ok">已入库</span></div></div>';
+    toast("网页抓取并入库完成");
+    await loadReferences();
+  } catch (e) {
+    resultEl.innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+    toast(e.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "抓取并入库";
   }
 }
 
@@ -741,13 +795,13 @@ async function openCanvas(path) {
 
 async function renderWorkflow() {
   if (state.runtime?.mode === "cloudflare") {
-    app.innerHTML = '<div class="section-title"><h2>云端工作流</h2><span class="muted">Git 数据由 Local Agent 同步到 Cloudflare</span></div>'
-      + '<div class="card"><h3>Cloudflare 模式</h3>'
-      + '<p class="muted">云端不会浏览本机磁盘或执行 git。请在本机 NexusMind 配置采集目录，并设置 NEXUSMIND_CLOUD_SYNC_URL 与 NEXUSMIND_CLOUD_SYNC_TOKEN。</p></div>'
-      + '<div class="section-title"><h2>同步状态</h2><div class="actions"><button class="btn ghost" onclick="loadWorkflow()">刷新状态</button></div></div>'
+    app.innerHTML = '<div class="section-title"><h2>' + t("workflow.cloudTitle") + '</h2><span class="muted">' + t("workflow.cloudHint") + '</span></div>'
+      + '<div class="card"><h3>' + t("workflow.cloudApi") + '</h3>'
+      + '<p class="muted">' + t("workflow.cloudBody") + '</p></div>'
+      + '<div class="section-title"><h2>' + t("workflow.syncStatus") + '</h2><div class="actions"><button class="btn ghost" onclick="loadWorkflow()">' + t("workflow.refresh") + '</button></div></div>'
       + '<div id="workflowSummary" class="grid stats"></div>'
-      + '<div class="section-title"><h2>已同步仓库</h2><span class="muted">来自 Local Agent</span></div>'
-      + '<div id="workflowRepos" class="card"><div class="empty">正在读取云端仓库状态…</div></div>';
+      + '<div class="section-title"><h2>' + t("workflow.syncedRepos") + '</h2><span class="muted">' + t("workflow.fromAgent") + '</span></div>'
+      + '<div id="workflowRepos" class="card"><div class="empty">' + t("workflow.loading") + '</div></div>';
     await loadWorkflow();
     return;
   }
@@ -976,8 +1030,9 @@ async function loadWorkflow() {
       return '<div class="workflow-repo"><div class="workflow-repo-head"><div><strong>' + esc(repo.name) + '</strong>'
         + '<div class="reference-sub">' + esc(repo.path) + '</div></div><div class="actions">'
         + '<span class="badge">' + esc(repo.branch) + '</span>' + status + '</div></div>'
-        + '<div class="workflow-meta">复盘身份：' + esc((repo.current_user?.name || "Unknown") + " <" + (repo.current_user?.email || "未配置 user.email") + ">") + '</div>'
-        + '<div class="workflow-meta">今日全部 ' + repo.commit_count + ' commits · ' + repo.merge_count + ' merge/PR · '
+        + '<div class="workflow-meta">当前仓库用户：' + esc((repo.current_user?.name || "Unknown") + " <" + (repo.current_user?.email || "未配置 user.email") + ">") + '</div>'
+        + '<div class="workflow-meta">Git Pull：' + esc(repo.pull?.success ? (repo.pull?.message || "成功") : (repo.pull?.message || "失败")) + '</div>'
+        + '<div class="workflow-meta">今日全部用户 ' + repo.commit_count + ' commits · ' + repo.merge_count + ' merge/PR · '
         + repo.tag_count + ' tags · ' + tree.changed_count + ' 未提交文件</div>' + commits + '</div>';
     }).join("");
   } catch (e) {
@@ -1001,31 +1056,34 @@ async function syncWorkflow() {
 }
 
 function reviewTemplate() {
-  return '<div class="grid two"><div class="card"><h3>生成周复盘</h3>'
-    + '<p class="muted">按照 ISO 周汇总 Daily Logs，输出到 90-AI-Workspace/reviews。</p>'
-    + '<div class="form-group"><label>ISO 周</label><input id="reviewWeek" class="input" placeholder="2026-W38" /></div>'
-    + '<div class="actions" style="margin-top:14px"><button class="btn" onclick="runReview()">生成复盘</button></div></div>'
-    + '<div class="card viewer"><h3>生成结果</h3><div id="reviewResult" class="empty">生成后会在这里显示周报内容</div></div></div>';
+  return '<div class="grid two"><div class="card"><h3>' + t("review.generate") + '</h3>'
+    + '<p class="muted">' + t("review.description") + '</p>'
+    + '<div class="form-group"><label>' + t("review.isoWeek") + '</label><input id="reviewWeek" class="input" placeholder="2026-W38" /></div>'
+    + '<div class="form-group"><label>' + t("review.scope") + '</label><select id="reviewAuthorScope" class="input"><option value="current_user">' + t("review.currentUser") + '</option><option value="all_users">' + t("review.allUsers") + '</option></select></div>'
+    + '<div class="actions" style="margin-top:14px"><button class="btn" onclick="runReview()">' + t("review.generate") + '</button></div></div>'
+    + '<div class="card viewer"><h3>' + t("review.result") + '</h3><div id="reviewResult" class="empty">' + t("review.resultHint") + '</div></div></div>';
 }
 
 async function runReview() {
   const week = document.getElementById("reviewWeek").value.trim() || null;
+  const authorScope = document.getElementById("reviewAuthorScope").value;
   const resultEl = document.getElementById("reviewResult");
   try {
-    const result = await api("/mcp/vault_weekly_review", { method: "POST", body: JSON.stringify({ week: week }) });
+    const result = await api("/mcp/vault_weekly_review", { method: "POST", body: JSON.stringify({ week: week, author_scope: authorScope }) });
     const note = await api("/mcp/vault_read", { method: "POST", body: JSON.stringify({ path: result.path }) });
     resultEl.className = "review-report";
-    resultEl.innerHTML = '<div class="result-head"><div><strong>' + esc(result.week) + ' 工作周报</strong>'
+    resultEl.innerHTML = '<div class="result-head"><div><strong>' + esc(t("review.weekly", { week: result.week })) + '</strong>'
       + '<div class="path">' + esc(result.path) + '</div></div><div class="actions">'
       + '<span class="badge ok">' + result.git_commits + ' commits</span>'
-      + '<span class="badge">' + (result.git_active_repositories || []).length + ' 活跃仓库</span>'
-      + '<span class="badge">' + (result.knowledge_topics || 0) + ' 知识主题</span></div></div>'
+      + '<span class="badge">' + esc(authorScope === "all_users" ? t("review.allUsers") : t("review.currentUser")) + '</span>'
+      + '<span class="badge">' + esc(t("review.activeRepos", { count: (result.git_active_repositories || []).length })) + '</span>'
+      + '<span class="badge">' + esc(t("review.knowledgeTopics", { count: result.knowledge_topics || 0 })) + '</span></div></div>'
       + '<article class="markdown-body review-markdown">' + renderMarkdown(note.content) + '</article>';
     bindWikiLinks(resultEl);
-    toast("工作周报已生成");
+    toast(t("review.done"));
   } catch (e) {
     resultEl.className = "empty";
-    resultEl.textContent = "生成失败：" + e.message;
+    resultEl.textContent = t("review.failed", { error: e.message });
   }
 }
 async function loadRuntime() {
@@ -1036,8 +1094,10 @@ async function loadRuntime() {
   }
   const capabilities = state.runtime.capabilities || {};
   const viewCaps = {
+    ingest: "uploads",
     compile: "knowledge_compile",
-    governance: "governance"
+    governance: "governance",
+    review: "weekly_review"
   };
   Object.keys(viewCaps).forEach(function(view) {
     const button = document.querySelector('.nav-item[data-view="' + view + '"]');
@@ -1049,24 +1109,27 @@ async function checkHealth() {
   try {
     const data = await api("/health");
     serviceDot.classList.add("ok");
-    serviceText.textContent = "服务正常 · v" + data.version;
+    serviceText.textContent = t("status.ok", { version: data.version });
   } catch (_) {
     serviceDot.classList.remove("ok");
-    serviceText.textContent = "服务不可用";
+    serviceText.textContent = t("status.unavailable");
   }
 }
 
 async function renderCurrent() {
-  titleEl.textContent = titles[state.view];
   const caps = state.runtime?.capabilities || {};
-  if (state.view === "compile" && caps.knowledge_compile === false) {
-    app.innerHTML = '<div class="card empty">Cloudflare 模式下知识编译由 Local Agent 执行后同步；云端不直接运行本地编译器。</div>';
-    return;
+  const unsupported =
+    (state.view === "compile" && caps.knowledge_compile === false)
+    || (state.view === "governance" && caps.governance === false)
+    || (state.view === "ingest" && caps.uploads === false)
+    || (state.view === "review" && caps.weekly_review === false);
+  if (unsupported) {
+    state.view = "dashboard";
+    document.querySelectorAll(".nav-item").forEach(function(el) {
+      el.classList.toggle("active", el.dataset.view === "dashboard");
+    });
   }
-  if (state.view === "governance" && caps.governance === false) {
-    app.innerHTML = '<div class="card empty">当前 Cloudflare 运行模式未启用完整知识治理；知识图谱与搜索仍可使用。</div>';
-    return;
-  }
+  titleEl.textContent = t(titleKeys[state.view]);
   if (state.view === "dashboard") return renderDashboard();
   if (state.view === "search") app.innerHTML = searchTemplate();
   if (state.view === "graph") return renderGraph();
@@ -1083,6 +1146,7 @@ window.switchView = async function(view) {
     el.classList.toggle("active", el.dataset.view === view);
   });
   await renderCurrent();
+  window.NexusUI?.localize(app);
 };
 
 document.getElementById("nav").addEventListener("click", function(event) {
@@ -1101,9 +1165,17 @@ document.addEventListener("keydown", function(event) {
 });
 
 async function bootstrap() {
+  window.NexusUI?.bind();
   await loadRuntime();
   await checkHealth();
   await renderCurrent();
+  window.NexusUI?.localize(app);
 }
+
+window.addEventListener("nexusmind:languagechange", async function() {
+  await checkHealth();
+  await renderCurrent();
+  window.NexusUI?.localize(app);
+});
 
 bootstrap();

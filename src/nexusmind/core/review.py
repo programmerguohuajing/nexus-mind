@@ -180,7 +180,9 @@ def _classify_commit(subject: str) -> Dict[str, str]:
     }
 
 
-def _extract_git_activity(text: str) -> Dict[str, Any]:
+def _extract_git_activity(text: str, author_scope: str = "current_user") -> Dict[str, Any]:
+    if author_scope not in {"current_user", "all_users"}:
+        raise ValueError("author_scope must be current_user or all_users")
     start = text.find("<!-- nexusmind:git-activity:start -->")
     end = text.find("<!-- nexusmind:git-activity:end -->")
     if start < 0 or end < 0 or end <= start:
@@ -218,7 +220,7 @@ def _extract_git_activity(text: str) -> Dict[str, Any]:
             })
             continue
 
-        user = re.match(r"^- 采集用户：.* <([^>]+)>$", line)
+        user = re.match(r"^- (?:采集用户|当前仓库用户)：.* <([^>]+)>$", line)
         if user and repo_status:
             email = user.group(1).strip().lower()
             current_user_email = "" if email == "未配置 user.email" else email
@@ -235,9 +237,9 @@ def _extract_git_activity(text: str) -> Dict[str, Any]:
             r"^\s+- Release/Tag：(.+?)\s+—\s+target-author\s+<([^>]+)>$",
             line,
         )
-        if release and current_repo and current_user_email:
+        if release and current_repo:
             target_email = release.group(2).strip().lower()
-            if target_email == current_user_email:
+            if author_scope == "all_users" or (current_user_email and target_email == current_user_email):
                 tags += 1
                 release_tags.append({
                     "repository": current_repo,
@@ -250,9 +252,11 @@ def _extract_git_activity(text: str) -> Dict[str, Any]:
             r"^\s+- ([0-9a-fA-F]{7,40})\s+(.+?)\s+—\s+(.+?)\s+<([^>]+)>$",
             line,
         )
-        if commit and current_repo and current_user_email:
+        if commit and current_repo:
             author_email = commit.group(4).strip().lower()
-            if author_email != current_user_email:
+            if author_scope == "current_user" and (
+                not current_user_email or author_email != current_user_email
+            ):
                 continue
             subject = commit.group(2).strip()
             classified = _classify_commit(subject)
@@ -277,7 +281,11 @@ def _extract_git_activity(text: str) -> Dict[str, Any]:
     }
 
 
-def _week_data(week_str: str, vault_root: Path) -> Dict[str, Any]:
+def _week_data(
+    week_str: str,
+    vault_root: Path,
+    author_scope: str = "current_user",
+) -> Dict[str, Any]:
     year, week = _parse_week(week_str)
     daily_dir = vault_root / "30-Logs" / "Daily"
     daily_files = [
@@ -314,7 +322,7 @@ def _week_data(week_str: str, vault_root: Path) -> Dict[str, Any]:
         pending.extend(todo)
         daily_tasks = _extract_task_rows(text, daily.stem)
         tasks.extend(daily_tasks)
-        git = _extract_git_activity(text)
+        git = _extract_git_activity(text, author_scope=author_scope)
         git_commits += git["commits"]
         git_tags += git["tags"]
         git_repositories.update(git["repositories"])
@@ -456,6 +464,149 @@ def _group_commit_highlights(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _synthesize_git_workstreams(data: Dict[str, Any]) -> Dict[str, Any]:
+    """把 Git 提交聚合为仓库级工作主线，避免逐条展示日志。"""
+    commits = data.get("git_commit_items", [])
+    releases = data.get("git_release_tags", [])
+    by_repo: Dict[str, List[Dict[str, str]]] = {}
+    for item in commits:
+        by_repo.setdefault(item["repository"], []).append(item)
+
+    release_by_repo: Dict[str, List[str]] = {}
+    for item in releases:
+        release_by_repo.setdefault(item["repository"], []).append(item["tag"])
+
+    workstreams: List[Dict[str, Any]] = []
+    for repo, items in sorted(by_repo.items(), key=lambda pair: (-len(pair[1]), pair[0].lower())):
+        categories: Dict[str, int] = {}
+        scopes: Dict[str, int] = {}
+        titles: List[str] = []
+        for item in items:
+            categories[item["category"]] = categories.get(item["category"], 0) + 1
+            scope = item.get("scope", "").strip()
+            if scope:
+                scopes[scope] = scopes.get(scope, 0) + 1
+            title = item["title"].strip().rstrip("。")
+            if title and title not in titles:
+                titles.append(title)
+
+        dominant_categories = [
+            name for name, _ in sorted(categories.items(), key=lambda pair: (-pair[1], pair[0]))
+        ][:3]
+        dominant_scopes = [
+            name for name, _ in sorted(scopes.items(), key=lambda pair: (-pair[1], pair[0]))
+        ][:4]
+        focus = "、".join(dominant_scopes) if dominant_scopes else "、".join(dominant_categories)
+        workstreams.append({
+            "repository": repo,
+            "commit_count": len(items),
+            "categories": dominant_categories,
+            "scopes": dominant_scopes,
+            "focus": focus,
+            "highlights": titles[:3],
+            "releases": release_by_repo.get(repo, []),
+        })
+
+    lines: List[str] = []
+    for stream in workstreams:
+        focus = f"围绕 **{stream['focus']}** " if stream["focus"] else ""
+        if stream["highlights"]:
+            delivery = "；".join(stream["highlights"])
+            sentence = (
+                f"- **{stream['repository']}**：{focus}形成 {delivery}"
+                f"；共归并 {stream['commit_count']} 个 Git 变更"
+            )
+        else:
+            sentence = f"- **{stream['repository']}**：{focus}共归并 {stream['commit_count']} 个 Git 变更"
+        if stream["releases"]:
+            sentence += "；完成 " + "、".join(f"`{tag}`" for tag in stream["releases"]) + " 发布/标记"
+        lines.append(sentence + "。")
+
+    return {"workstreams": workstreams, "lines": lines}
+
+
+def _synthesize_outcomes(data: Dict[str, Any], compile_stats: Dict[str, Any]) -> List[str]:
+    """把 Git、人工日志和知识编译结果合并成成果层摘要。"""
+    outcomes: List[str] = []
+    streams = _synthesize_git_workstreams(data)["workstreams"]
+
+    category_totals: Dict[str, int] = {}
+    for item in data.get("git_commit_items", []):
+        category = item.get("category", "其他变更")
+        category_totals[category] = category_totals.get(category, 0) + 1
+    priority = ["版本发布", "功能交付", "安全加固", "问题修复", "架构重构", "性能优化", "CI / 发布工程", "构建工程", "测试质量", "文档沉淀"]
+    active = [name for name in priority if category_totals.get(name)]
+    if active:
+        outcomes.append("工程成果主要集中在" + "、".join(f"**{name}**" for name in active[:5]) + "，而不是零散提交堆叠。")
+
+    completed = list(dict.fromkeys(item.strip() for item in data.get("completed", []) if item.strip()))
+    if completed:
+        outcomes.append("人工日志确认完成：" + "；".join(completed[:4]) + ("。" if len(completed) <= 4 else f"；另有 {len(completed) - 4} 项。"))
+
+    targets = compile_stats.get("targets", [])
+    if targets:
+        domains = compile_stats.get("domains", {})
+        domain_text = "、".join(
+            f"{domain} {count} 个"
+            for domain, count in sorted(domains.items(), key=lambda pair: (-pair[1], pair[0]))
+        )
+        outcomes.append(
+            f"知识库将本周工作进一步沉淀为 {len(targets)} 个正式知识主题"
+            + (f"（{domain_text}）" if domain_text else "")
+            + "。"
+        )
+
+    releases = data.get("git_release_tags", [])
+    if releases:
+        release_text = "、".join(f"{item['repository']} `{item['tag']}`" for item in releases)
+        outcomes.append(f"交付节点：{release_text}。")
+
+    if not outcomes:
+        outcomes.append("本周缺少足够的结构化成果数据，暂不做超出证据范围的推断。")
+    return outcomes
+
+
+def _synthesize_daily_context(data: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+    projects = sorted({item.get("project", "").strip() for item in data.get("tasks", []) if item.get("project", "").strip()})
+    outputs = list(dict.fromkeys(item.get("output", "").strip() for item in data.get("tasks", []) if item.get("output", "").strip()))
+    task_names = list(dict.fromkeys(item.get("task", "").strip() for item in data.get("tasks", []) if item.get("task", "").strip()))
+    links = list(dict.fromkeys(item.get("link", "").strip() for item in data.get("tasks", []) if item.get("link", "").strip()))
+
+    if projects:
+        lines.append("主要关联项目：" + "、".join(projects) + "。")
+    if outputs:
+        lines.append("人工日志记录的交付产出：" + "；".join(outputs[:5]) + ("。" if len(outputs) <= 5 else f"；另有 {len(outputs) - 5} 项。"))
+    elif task_names:
+        lines.append("人工日志记录的主要事项：" + "；".join(task_names[:5]) + ("。" if len(task_names) <= 5 else f"；另有 {len(task_names) - 5} 项。"))
+    task_links = [item for item in task_names if "[[" in item and "]]" in item]
+    if task_links:
+        lines.append("关联任务：" + "、".join(task_links[:5]) + ("。" if len(task_links) <= 5 else f"；另有 {len(task_links) - 5} 项。"))
+    if links:
+        lines.append("关联任务 / 知识：" + "、".join(links[:5]) + ("。" if len(links) <= 5 else f"；另有 {len(links) - 5} 项。"))
+    if data.get("total_hours"):
+        lines.append(f"结构化日志记录投入 {data['total_hours']:.1f}h，覆盖 {len(data.get('daily_files', []))} 天。")
+    if not lines:
+        lines.append("本周没有足够的结构化人工日志用于补充工作上下文。")
+    return lines
+
+
+def _next_week_focus(data: Dict[str, Any], governance: Dict[str, int]) -> List[str]:
+    focus: List[str] = []
+    pending = list(dict.fromkeys(item.strip() for item in data.get("pending", []) if item.strip()))
+    if pending:
+        focus.append("优先收口未完成事项：" + "；".join(pending[:3]) + "。")
+    if data.get("git_dirty_repositories"):
+        focus.append(f"处理 {data['git_dirty_repositories']} 个仍有未提交变更的仓库，避免工作跨周失去可追溯性。")
+    if governance.get("broken"):
+        focus.append(f"治理 {governance['broken']} 个未解析链接，提升知识引用完整性。")
+    if governance.get("orphans"):
+        focus.append(f"处理 {governance['orphans']} 个知识孤岛，补充入口、反链或归档判断。")
+    if not focus:
+        focus.append("延续本周主线，并优先把已完成工程成果沉淀为可复用知识与明确交付节点。")
+    return focus
+
+
 def _executive_summary(
     data: Dict[str, Any],
     compile_stats: Dict[str, Any],
@@ -569,16 +720,19 @@ def _bullet_lines(values: List[str], empty_text: str) -> str:
 def generate_weekly_review(
     week_str: Optional[str] = None,
     vault_root: Path = VAULT_ROOT,
+    author_scope: str = "current_user",
 ) -> Dict[str, Any]:
     """从真实周数据生成结构化复盘；不调用模型，不补写日志中不存在的事实。"""
     if not week_str:
         now = datetime.now().isocalendar()
         week_str = f"{now.year}-W{now.week:02d}"
     _parse_week(week_str)
+    if author_scope not in {"current_user", "all_users"}:
+        raise ValueError("author_scope must be current_user or all_users")
 
-    data = _week_data(week_str, vault_root)
+    data = _week_data(week_str, vault_root, author_scope=author_scope)
     previous_week = _previous_week(week_str)
-    previous = _week_data(previous_week, vault_root)
+    previous = _week_data(previous_week, vault_root, author_scope=author_scope)
     compile_stats = _compilation_stats(week_str, vault_root)
     governance = {
         "broken": find_broken_links(vault_root=vault_root)["total_broken"],
@@ -609,22 +763,34 @@ def generate_weekly_review(
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     avg_focus = f"{data['avg_focus']:.1f}/10" if data["avg_focus"] is not None else "无数据"
     projects = "、".join(data["projects"]) if data["projects"] else "未从结构化任务中识别"
-    detail = "\n".join(task_lines) if task_lines else "- 本周暂无结构化任务明细。"
+    daily_context = _bullet_lines(
+        _synthesize_daily_context(data),
+        "本周暂无结构化人工日志。",
+    )
 
     git_summary = _group_commit_highlights(data)
     active_git_repositories = sorted(git_summary["by_repo"].keys())
     executive_summary = _executive_summary(data, compile_stats)
-    category_highlights = "\n".join(git_summary["category_lines"]) or "- 本周没有可提炼的 Git 变更主线。"
-    repo_highlights = "\n".join(git_summary["repo_lines"]) or "- 本周没有活跃 Git 仓库。"
+    workstreams = _synthesize_git_workstreams(data)
+    workstream_text = "\n".join(workstreams["lines"]) or "- 本周没有足够 Git 数据形成明确工作主线。"
+    outcome_text = _bullet_lines(
+        _synthesize_outcomes(data, compile_stats),
+        "本周没有足够数据提炼关键成果。",
+    )
     release_highlights = "\n".join(git_summary["release_lines"]) or "- 本周没有采集到版本发布 / Tag。"
     knowledge_highlights = _knowledge_highlights(compile_stats)
-    commit_details = _git_commit_details(data)
+    next_focus = _bullet_lines(
+        _next_week_focus(data, governance),
+        "暂无明确的下周关注项。",
+    )
     status_icon = "✅" if not data["pending"] and not data["git_dirty_repositories"] else "🟡"
 
+    scope_label = "当前仓库用户" if author_scope == "current_user" else "所有用户"
     content = f"""---
 title: "{week_str} 工作周报"
 generated_at: "{timestamp}"
 week: "{week_str}"
+author_scope: "{author_scope}"
 total_hours: {data['total_hours']:.1f}
 avg_focus: "{avg_focus}"
 completed_items: {len(data['completed'])}
@@ -643,6 +809,8 @@ tags:
 
 # {week_str} 工作周报
 
+> **Git 统计口径：{scope_label}**
+>
 > **本周摘要**
 > {executive_summary}
 
@@ -663,19 +831,19 @@ tags:
 
 ## 🎯 本周工作主线
 
-{category_highlights}
+{workstream_text}
 
-### 仓库投入分布
+> 工作主线不是按提交时间排序，而是将同一仓库、同一 scope 和相近工程类型的变更归并后形成。
 
-{repo_highlights}
+## ✅ 关键成果与交付
 
-## 🚀 发布与交付
+{outcome_text}
+
+### 发布节点
 
 {release_highlights}
 
-{_bullet_lines(data['completed'], "没有额外的结构化完成项；主要成果已从 Git 工作记录中提炼。")}
-
-> 工作主线由 Conventional Commit 的 `type(scope): message`、仓库归属和 Release/Tag 事实自动提炼，不对提交记录中不存在的业务结果进行补写。
+> Git Commit、Release/Tag、Daily Log 与知识编译审计共同作为成果证据；报告只保留提炼后的结论，不在正文逐条复述 Git Log。
 
 ## 🧠 知识沉淀
 
@@ -686,9 +854,9 @@ tags:
 
 {knowledge_highlights}
 
-## 📝 日志任务与人工记录
+## 📝 人工日志补充
 
-{detail}
+{daily_context}
 
 ### 未完成 / 顺延
 
@@ -698,9 +866,13 @@ tags:
 
 {comparison}
 
-## ⚠️ 风险与下周关注
+## ⚠️ 风险与遗留
 
 {attention}
+
+## 🧭 下周重点
+
+{next_focus}
 
 ### 知识库健康度
 
@@ -708,16 +880,13 @@ tags:
 - 知识孤岛：**{governance['orphans']}**
 - 有未提交变更的仓库：**{data['git_dirty_repositories']}**
 
-## 🔎 Git Commit 明细（追溯）
-
-{commit_details}
-
 ## 数据口径
 
-- 工作成果优先由 Git Commit、Release/Tag、Daily Log 和知识编译审计提炼。
-- Conventional Commit 会按功能、修复、安全、发布、CI、文档等工程类别自动归档。
-- 周报只陈述可验证的工作事实；不会根据提交信息推断收入、业务效果或未记录的主观结论。
-- 原始 Commit 明细保留在文末，方便从摘要追溯到具体变更。
+- Git 自动采集保存所有用户的提交记录；本周报 Git 统计口径为：**{scope_label}**。
+- 原始 Git Commit 仅作为内部证据源参与聚合，不在周报正文逐条展示。
+- 工作主线会按仓库、scope、工程类别、Release/Tag 与人工日志进行去重和聚合，再形成成果级摘要。
+- Daily Log、知识编译审计和知识库治理状态会与 Git 数据交叉整合，避免把提交数量等同于工作价值。
+- 周报只陈述可验证事实；不会根据提交信息推断收入、业务效果或未记录的主观结论。
 """
     review_path = f"90-AI-Workspace/reviews/{week_str}-Weekly-Review.md"
     review_file = vault_root / review_path
@@ -736,6 +905,8 @@ tags:
     return {
         "status": "review_generated",
         "week": week_str,
+        "author_scope": author_scope,
+        "author_scope_label": scope_label,
         "path": review_path,
         "daily_logs_count": len(data["daily_files"]),
         "logged_tasks_count": len(data["tasks"]),

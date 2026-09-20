@@ -26,10 +26,12 @@ Selection behavior:
 - Selecting a parent folder collects direct Git child repositories.
 - Duplicate paths are ignored.
 - After removing or adding folders, click **Save Configuration**.
+Before each collection pass, NexusMind runs `git pull --ff-only` for repositories with an `origin` remote so the latest remote history is available without creating an automatic merge commit. It then collects Git activity for all authors rather than filtering to the repository's current `user.email`.
+
 The collector records:
 
 - current branch,
-- daily commits,
+- daily commits from all users,
 - Conventional Commit type and scope,
 - merge / PR hints,
 - tags / releases,
@@ -92,7 +94,12 @@ Open **Knowledge Governance** to:
 Governance metrics are point-in-time snapshots unless historical snapshots are explicitly stored.
 ## 8. Weekly Review
 
-Open **Weekly Review**, choose an ISO week, and generate a report.
+Open **Weekly Review**, choose an ISO week, select a Git statistics scope, and generate a report. The available scopes are:
+
+- **Current working-directory / repository user**: filter commits and tags by each repository's current `user.email`;
+- **All users**: include commits and tags from every collected author.
+
+Raw Git activity is always collected and retained for all users; this scope only changes the generated review.
 
 The report combines:
 
@@ -130,7 +137,7 @@ NexusMind supports three deployment modes:
 
 - **Local**: full local folder browsing, Git collection, filesystem Vault, and PDF/DOCX extraction.
 - **Docker**: run `docker compose up -d --build`; persistent data lives under `/data`. Mount host repositories into the container when Git collection is required.
-- **Cloudflare Workers**: Python Worker + FastAPI + D1 + R2. The Worker never browses the user's computer; a Local Agent collects complete Git history and synchronizes structured events to the cloud.
+- **Cloudflare Workers**: Python Worker + FastAPI + D1 + R2. The Worker never browses the user's computer; the Local Agent collects complete Git history and performs incremental two-way synchronization between the local Vault and cloud D1.
 
 Configure cloud replication on the Local Agent:
 
@@ -139,7 +146,7 @@ NEXUSMIND_CLOUD_SYNC_URL=https://<worker>.workers.dev
 NEXUSMIND_CLOUD_SYNC_TOKEN=<SYNC_TOKEN>
 ```
 
-The cloud stores complete team Git history, while weekly reviews only use commits whose author email matches each repository's effective `user.email`.
+Clicking **Sync Now** first refreshes local Git activity, then runs two-way knowledge-base synchronization: local creates/edits are uploaded, cloud creates/edits are downloaded, and deletions propagate in both directions. If both sides changed the same file since the last sync, neither side is overwritten; the cloud copy is written under the local data directory's `sync-conflicts` folder for manual reconciliation. The cloud also stores complete team Git history, while weekly reviews only use commits whose author email matches each repository's effective `user.email`.
 
 ## 12. Local Agent Desktop App
 
@@ -223,3 +230,27 @@ Important:
 - the MCP process uses the same `NEXUSMIND_VAULT_ROOT` as local NexusMind;
 - stdio MCP is intended for Local / Local Agent use;
 - Cloudflare `/mcp/*` HTTP routes are API endpoints, not a remote MCP transport endpoint.
+
+
+## 8. Web UI Language and Themes
+
+The NexusMind web client supports live language and theme switching. The current language options are **Simplified Chinese** and **English**. Available themes are **System, Light, Dark, Ocean, and Forest**.
+
+Language and theme selectors are available in the upper-right corner. Changes apply immediately and are persisted in browser local storage, so the previous choices are restored on refresh or the next visit. Language switching changes product UI text only; knowledge content, Markdown, filenames, and user data are not translated.
+
+The frontend also exposes a `window.NexusUI` interface for adding more languages and themes later:
+
+- `NexusUI.setLanguage("zh-CN" | "en-US")`
+- `NexusUI.setTheme("system" | "light" | "dark" | "ocean" | "forest")`
+- `NexusUI.getLanguage()`
+- `NexusUI.getTheme()`
+
+
+### Weekly review synthesis
+
+A weekly review is not a Git log viewer. Git commits are used only as evidence. NexusMind deduplicates and aggregates them by repository, Conventional Commit type, scope, Release/Tag, Daily Logs, and knowledge compilation records before generating workstreams, key outcomes, delivery milestones, knowledge capture, risks, and next-week focus. Commit hashes are not listed line by line in the report body.
+
+
+### Import from an online URL
+
+Under **Import → Online URL**, enter an HTTP/HTTPS page. NexusMind fetches the page, detects its title, removes scripts/styles/navigation and other non-content elements, extracts the main text, and stores it in the `60-References/Articles` Raw layer. Local NexusMind Agent / local API mode supports `localhost`, `127.0.0.1`, LAN IPs, and `.local` addresses; NexusMind Cloud API directly fetches public web pages only. Both modes enforce page-size and redirect limits.

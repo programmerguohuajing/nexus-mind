@@ -173,3 +173,44 @@ def test_collection_does_not_depend_on_repository_user_identity(tmp_path):
     snapshot = collect_repository(repo, day=date.today())
     assert snapshot["commit_count"] == 1
     assert snapshot["commits"][0]["author_email"] == "other@example.com"
+
+
+def test_collect_repository_pulls_latest_remote_commits_before_collecting(tmp_path):
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _run(source, "init")
+    _run(source, "config", "user.name", "Tester")
+    _run(source, "config", "user.email", "tester@example.com")
+    (source / "README.md").write_text("one\n", encoding="utf-8")
+    _run(source, "add", ".")
+    _run(source, "commit", "-m", "feat: first")
+    _run(source, "remote", "add", "origin", str(remote))
+    _run(source, "push", "-u", "origin", "HEAD")
+
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", str(remote), str(clone)], check=True, capture_output=True, text=True)
+    _run(clone, "config", "user.name", "Clone User")
+    _run(clone, "config", "user.email", "clone@example.com")
+
+    (source / "second.txt").write_text("two\n", encoding="utf-8")
+    _run(source, "add", ".")
+    _run(
+        source,
+        "-c", "user.name=Other User",
+        "-c", "user.email=other@example.com",
+        "commit", "-m", "feat: remote teammate commit",
+    )
+    _run(source, "push")
+
+    snapshot = collect_repository(clone, day=date.today())
+
+    assert snapshot["pull"]["attempted"] is True
+    assert snapshot["pull"]["success"] is True
+    assert any(
+        item["subject"] == "feat: remote teammate commit"
+        and item["author_email"] == "other@example.com"
+        for item in snapshot["commits"]
+    )

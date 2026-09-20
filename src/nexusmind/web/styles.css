@@ -934,3 +934,268 @@ pre {
   .folder-picker-overlay { padding: 8px; }
   .folder-picker { width: 100%; max-height: 96vh; }
 }
+
+/* ---------- UI preferences: themes + language controls ---------- */
+:root {
+  --sidebar-bg: #fbfbfc;
+  --topbar-bg: rgba(255,255,255,.96);
+  --nav-text: #4b5563;
+  --nav-hover: #eef1f4;
+  --nav-active-bg: #e9eef9;
+  --nav-active-text: #174ea6;
+  --input-bg: #ffffff;
+  --soft-border: #eceff3;
+  --code-bg: #f6f8fa;
+  --code-text: #24292f;
+  --path-text: #57606a;
+  --shadow: rgba(15,23,42,.08);
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f141b;
+  --surface: #161d26;
+  --surface-subtle: #1d2631;
+  --line: #2b3542;
+  --line-strong: #3a4655;
+  --text: #e6edf3;
+  --muted: #9aa7b5;
+  --brand: #3b82f6;
+  --brand-hover: #60a5fa;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --danger: #f85149;
+  --sidebar-bg: #111821;
+  --topbar-bg: rgba(17,24,33,.96);
+  --nav-text: #a9b4c0;
+  --nav-hover: #1d2733;
+  --nav-active-bg: #17335f;
+  --nav-active-text: #9ec5ff;
+  --input-bg: #111821;
+  --soft-border: #293442;
+  --code-bg: #0d1117;
+  --code-text: #d7e0e8;
+  --path-text: #9aa7b5;
+  --shadow: rgba(0,0,0,.28);
+}
+
+:root[data-theme="ocean"] {
+  --bg: #eef7fb;
+  --surface: #ffffff;
+  --surface-subtle: #e7f3f8;
+  --line: #c9dfe8;
+  --line-strong: #afcfdb;
+  --text: #173042;
+  --muted: #557486;
+  --brand: #087ea4;
+  --brand-hover: #066b8d;
+  --ok: #137a63;
+  --warn: #9a6700;
+  --danger: #c33c54;
+  --sidebar-bg: #f4fbfd;
+  --topbar-bg: rgba(248,253,255,.96);
+  --nav-text: #42697b;
+  --nav-hover: #e0f1f6;
+  --nav-active-bg: #d4edf5;
+  --nav-active-text: #075e7a;
+  --input-bg: #ffffff;
+  --soft-border: #dbeaf0;
+  --code-bg: #eaf5f8;
+  --code-text: #173042;
+  --path-text: #557486;
+}
+
+:root[data-theme="forest"] {
+  --bg: #f1f6f1;
+  --surface: #ffffff;
+  --surface-subtle: #e9f2e9;
+  --line: #cddfce;
+  --line-strong: #b6d0b8;
+  --text: #203326;
+  --muted: #607465;
+  --brand: #2f7d4a;
+  --brand-hover: #25683d;
+  --ok: #247a43;
+  --warn: #8a6500;
+  --danger: #bd3f4b;
+  --sidebar-bg: #f7fbf7;
+  --topbar-bg: rgba(250,253,250,.96);
+  --nav-text: #526b58;
+  --nav-hover: #e5efe6;
+  --nav-active-bg: #dcecdf;
+  --nav-active-text: #245d37;
+  --input-bg: #ffffff;
+  --soft-border: #dce8dd;
+  --code-bg: #edf5ee;
+  --code-text: #203326;
+  --path-text: #607465;
+}
+
+.sidebar { background: var(--sidebar-bg); }
+.topbar { background: var(--topbar-bg); }
+.nav-item { color: var(--nav-text); }
+.nav-item:hover { background: var(--nav-hover); color: var(--text); }
+.nav-item.active { background: var(--nav-active-bg); color: var(--nav-active-text); }
+.input, .textarea, .select { background: var(--input-bg); color: var(--text); }
+.list-item, .result { border-bottom-color: var(--soft-border); }
+.result:hover { background: var(--surface-subtle); }
+.path, .snippet { color: var(--path-text); }
+pre, .md-code { background: var(--code-bg); color: var(--code-text); border-color: var(--line); }
+.card, .topbar, .sidebar, .input, .textarea, .select, .top-picker-button, .top-picker-menu { transition: background-color .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease; }
+
+.top-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ui-picker {
+  position: relative;
+  width: 122px;
+  flex: 0 0 122px;
+}
+
+.top-picker-button {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 0 10px 0 12px;
+  background: var(--input-bg);
+  color: var(--text);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  align-items: center;
+  column-gap: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.picker-value {
+  min-width: 0;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.top-picker-button:hover {
+  border-color: var(--brand);
+  background: var(--surface-subtle);
+}
+.ui-picker.open .top-picker-button {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 5%, var(--input-bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
+}
+.picker-chevron {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  display: block;
+  justify-self: end;
+  flex: none;
+}
+.picker-chevron::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.8px solid var(--muted);
+  border-bottom: 1.8px solid var(--muted);
+  transform: translate(-50%, -65%) rotate(45deg);
+  transform-origin: center;
+  transition: transform .16s ease, border-color .16s ease;
+}
+.ui-picker.open .picker-chevron {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+.ui-picker.open .picker-chevron::before {
+  border-color: var(--brand);
+  border-width: 2px;
+  transform: translate(-50%, -35%) rotate(225deg);
+}
+
+.top-picker-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 80;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  display: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: 0 14px 36px var(--shadow);
+}
+.ui-picker.open .top-picker-menu {
+  display: grid;
+  gap: 3px;
+  animation: pickerIn .12s ease-out;
+}
+.top-picker-menu button {
+  position: relative;
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 34px 0 11px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.top-picker-menu button:hover {
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+.top-picker-menu button.active {
+  background: color-mix(in srgb, var(--brand) 15%, var(--surface));
+  border-color: color-mix(in srgb, var(--brand) 30%, transparent);
+  color: var(--brand);
+  font-weight: 700;
+}
+.top-picker-menu button.active::after {
+  content: "✓";
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+@keyframes pickerIn {
+  from { opacity: 0; transform: translateY(-4px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.web-ingest-intro {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+.web-ingest-intro strong { display: block; margin-bottom: 5px; }
+.web-ingest-intro p { margin: 0; line-height: 1.65; }
+#webIngestResult { margin-top: 14px; }
+
+@media (max-width: 760px) {
+  .top-picker-button { min-width: 92px; }
+  .top-picker-menu { min-width: 140px; }
+}`r`n

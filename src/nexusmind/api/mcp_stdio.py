@@ -140,7 +140,14 @@ TOOLS_MANIFEST = [
         "description": "按 ISO 周生成结构化周复盘。",
         "inputSchema": {
             "type": "object",
-            "properties": {"week": {"type": "string"}},
+            "properties": {
+                "week": {"type": "string"},
+                "author_scope": {
+                    "type": "string",
+                    "enum": ["current_user", "all_users"],
+                    "default": "current_user",
+                },
+            },
         },
     },
 ]
@@ -217,7 +224,10 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             folder=args.get("folder", "60-References/Articles"),
         )
     if name == "vault_weekly_review":
-        return generate_weekly_review(week_str=args.get("week"))
+        return generate_weekly_review(
+            week_str=args.get("week"),
+            author_scope=args.get("author_scope", "current_user"),
+        )
     raise ValueError(f"Unknown tool name: {name}")
 
 

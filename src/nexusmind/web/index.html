@@ -1,33 +1,34 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light" data-theme-choice="system">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>NexusMind · 知识库管理台</title>
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/assets/nexusmind-agent.png?v=2" />
-  <link rel="stylesheet" href="/styles.css?v=0.1.0-2" />
+  <link rel="icon" type="image/png" href="/assets/nexusmind-agent.png?v=4" />
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?v=4" />
+  <link rel="apple-touch-icon" href="/assets/nexusmind-agent.png?v=4" />
+  <link rel="stylesheet" href="/styles.css?v=0.2.3" />
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
         <img class="brand-mark" src="/assets/nexusmind-agent.svg" alt="NexusMind" />
-        <div><strong>NexusMind</strong><span>知识库管理</span></div>
+        <div><strong>NexusMind</strong><span data-i18n="app.subtitle">知识库管理</span></div>
       </div>
       <nav id="nav">
-        <button class="nav-item active" data-view="dashboard">总览</button>
-        <button class="nav-item" data-view="search">知识搜索</button>
-        <button class="nav-item" data-view="graph">知识图谱</button>
-        <button class="nav-item" data-view="ingest">资料入库</button>
-        <button class="nav-item" data-view="compile">编译队列</button>
-        <button class="nav-item" data-view="governance">知识治理</button>
-        <button class="nav-item" data-view="workflow">工作流</button>
-        <button class="nav-item" data-view="review">周复盘</button>
+        <button class="nav-item active" data-view="dashboard" data-i18n="nav.dashboard">总览</button>
+        <button class="nav-item" data-view="search" data-i18n="nav.search">知识搜索</button>
+        <button class="nav-item" data-view="graph" data-i18n="nav.graph">知识图谱</button>
+        <button class="nav-item" data-view="ingest" data-i18n="nav.ingest">资料入库</button>
+        <button class="nav-item" data-view="compile" data-i18n="nav.compile">编译队列</button>
+        <button class="nav-item" data-view="governance" data-i18n="nav.governance">知识治理</button>
+        <button class="nav-item" data-view="workflow" data-i18n="nav.workflow">工作流</button>
+        <button class="nav-item" data-view="review" data-i18n="nav.review">周复盘</button>
       </nav>
       <div class="sidebar-foot">
         <span id="serviceDot" class="dot"></span>
-        <span id="serviceText">正在连接服务…</span>
+        <span id="serviceText" data-i18n="status.connecting">正在连接服务…</span>
       </div>
     </aside>
     <main>
@@ -37,14 +38,17 @@
           <h1 id="pageTitle">知识库总览</h1>
         </div>
         <div class="top-actions">
-          <button class="btn ghost" id="refreshBtn">刷新</button>
-          <a class="btn" href="/docs" target="_blank">API 文档</a>
+          <div class="ui-picker" id="languagePicker"><button class="top-picker-button" type="button" aria-haspopup="menu" aria-expanded="false"><span class="picker-value">中文</span><span class="picker-chevron" aria-hidden="true"></span></button><div class="top-picker-menu" role="menu"><button type="button" data-value="zh-CN" data-i18n="language.zh">中文</button><button type="button" data-value="en-US" data-i18n="language.en">English</button></div></div>
+          <div class="ui-picker" id="themePicker"><button class="top-picker-button" type="button" aria-haspopup="menu" aria-expanded="false"><span class="picker-value">跟随系统</span><span class="picker-chevron" aria-hidden="true"></span></button><div class="top-picker-menu" role="menu"><button type="button" data-value="system" data-i18n="theme.system">跟随系统</button><button type="button" data-value="light" data-i18n="theme.light">浅色</button><button type="button" data-value="dark" data-i18n="theme.dark">深色</button><button type="button" data-value="ocean" data-i18n="theme.ocean">海洋</button><button type="button" data-value="forest" data-i18n="theme.forest">森林</button></div></div>
+          <button class="btn ghost" id="refreshBtn" data-i18n="action.refresh">刷新</button>
+          <a class="btn" href="/docs" target="_blank" data-i18n="action.apiDocs">API 文档</a>
         </div>
       </header>
       <section id="app" class="content"></section>
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/app.js?v=0.1.0-2"></script>
+  <script src="/ui.js?v=0.2.3"></script>
+  <script src="/app.js?v=0.2.3"></script>
 </body>
 </html>

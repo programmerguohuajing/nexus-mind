@@ -23,6 +23,7 @@ def test_cloud_runtime_capabilities():
     assert body["mode"] == "cloudflare"
     assert body["capabilities"]["folder_picker"] is False
     assert body["capabilities"]["cloud_git_ingest"] is True
+    assert body["capabilities"]["cloud_vault_sync"] is True
 
 
 def test_cloud_sync_payload_omits_local_repository_path():
@@ -59,6 +60,12 @@ def test_cloudflare_files_are_present():
     assert "CREATE TABLE IF NOT EXISTS notes" in migration
     assert "CREATE TABLE IF NOT EXISTS git_commits" in migration
     assert "CREATE TABLE IF NOT EXISTS cloud_files" in migration
+    sync_migration = (root / "migrations/0002_bidirectional_vault_sync.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS sync_tombstones" in sync_migration
+    routes = {route.path for route in cloud_app.routes}
+    assert "/api/cloud/vault/manifest" in routes
+    assert "/api/cloud/vault/pull" in routes
+    assert "/api/cloud/vault/push" in routes
 
 
 def test_brand_assets_and_web_favicon_are_present():

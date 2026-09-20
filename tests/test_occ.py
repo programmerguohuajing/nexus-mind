@@ -10,7 +10,7 @@ def test_api_health():
     res = client.get("/health")
     assert res.status_code == 200
     assert res.json()["status"] == "ok"
-    assert res.json()["version"] == "0.1.0"
+    assert res.json()["version"] == "0.2.0"
 
 
 def test_api_occ_workflow():

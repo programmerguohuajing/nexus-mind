@@ -26,10 +26,10 @@ NexusMind 可以在没有任何历史 Vault 数据的情况下启动。首次运
 - 选择上级目录：采集其直接子目录中的 Git 仓库。
 - 重复目录会自动去重。
 - 删除目录后需要点击 **保存配置**。
-保存后系统会按照配置采集：
+保存后系统会按照配置采集。每次采集仓库前会先执行 `git pull --ff-only`，在不自动制造合并提交的前提下拉取最新远端记录；随后采集当天所有作者的 Git 活动，而不是只采集当前 `user.email` 对应的提交：
 
 - 当前分支；
-- 当天 Commit；
+- 当天所有用户 Commit；
 - Conventional Commit 类型与 scope；
 - Merge / PR 线索；
 - Tag / Release；
@@ -92,7 +92,12 @@ Obsidian 不是必需客户端，只是可选的兼容编辑器。
 治理结果属于当前快照，不应在没有历史快照时解释成趋势。
 ## 8. 周复盘
 
-进入 **周复盘**，选择 ISO 周并生成。
+进入 **周复盘**，选择 ISO 周，并选择 Git 统计范围后生成。可选：
+
+- **当前工作目录 / 仓库配置的当前用户**：按每个仓库当前 `user.email` 过滤提交和 Tag；
+- **所有用户**：统计采集到的所有作者提交和 Tag。
+
+Git 原始活动始终按所有用户采集和保存，统计范围只影响复盘报告，不影响采集数据。
 
 周报会结合：
 
@@ -130,7 +135,7 @@ NexusMind 支持三种部署方式：
 
 - **本地直接运行**：完整支持本机文件夹选择、Git 采集、本地 Vault、PDF/DOCX 提取。
 - **Docker**：使用 `docker compose up -d --build`，数据持久化在 `/data`；如需采集 Git，需要把宿主机代码目录挂载到容器。
-- **Cloudflare Workers**：使用 Python Worker + FastAPI + D1 + R2。Worker 不访问本机目录，本地 NexusMind 作为 Local Agent 采集完整 Git Log 并同步到云端。
+- **Cloudflare Workers**：使用 Python Worker + FastAPI + D1 + R2。Worker 不直接访问本机目录；Local Agent 采集完整 Git Log，并在本地 Vault 与云端 D1 之间执行文本知识库双向增量同步。
 
 云端同步需要在 Local Agent 设置：
 
@@ -139,7 +144,7 @@ NEXUSMIND_CLOUD_SYNC_URL=https://<worker>.workers.dev
 NEXUSMIND_CLOUD_SYNC_TOKEN=<SYNC_TOKEN>
 ```
 
-Cloudflare 端会保存完整团队 Git Log，但周复盘只使用各仓库当前 `user.email` 对应的本人提交。
+点击 **立即同步** 时，Agent 会先刷新本地 Git 活动，再执行知识库双向同步：本地新增/修改内容上传到云端，云端新增/修改内容下载到本地，删除会双向传播。双方从上次同步后同时修改同一文件时不会互相覆盖，云端版本会保存到本地数据目录的 `sync-conflicts` 中供人工处理。Cloudflare 端同时保存完整团队 Git Log，但周复盘只使用各仓库当前 `user.email` 对应的本人提交。
 
 ---
 
@@ -225,3 +230,27 @@ stdio MCP Server 当前提供笔记读取/修改、搜索、死链/孤岛检查�
 - MCP 进程与本地 NexusMind 使用同一个 `NEXUSMIND_VAULT_ROOT`；
 - stdio MCP 主要用于 Local / Local Agent 模式；
 - Cloudflare 的 `/mcp/*` HTTP 路由目前属于 API 接口，不是远程 MCP Transport。
+
+
+## 8. C 端语言与主题
+
+NexusMind Web C 端支持界面语言和主题即时切换。当前语言支持 **简体中文** 与 **English**；主题支持 **跟随系统、浅色、深色、海洋、森林**。
+
+语言和主题选项位于页面右上角，切换后立即生效，并保存在浏览器本地存储中；刷新页面或再次打开 NexusMind 时会自动恢复上次选择。语言切换只改变产品界面文案，不翻译知识库正文、Markdown 内容、文件名或用户数据。
+
+前端同时暴露 `window.NexusUI` 接口，供后续扩展更多语言和主题：
+
+- `NexusUI.setLanguage("zh-CN" | "en-US")`
+- `NexusUI.setTheme("system" | "light" | "dark" | "ocean" | "forest")`
+- `NexusUI.getLanguage()`
+- `NexusUI.getTheme()`
+
+
+### 周复盘的提炼规则
+
+周复盘不是 Git Log 展示页。Git Commit 只作为内部证据源，系统会先按仓库、Conventional Commit 类型、scope、Release/Tag、Daily Log 和知识编译记录进行去重与聚合，再生成工作主线、关键成果、发布节点、知识沉淀、风险遗留和下周重点。周报正文不会逐条列出 Commit hash。
+
+
+### 在线链接入库
+
+在 **资料入库 → 在线链接** 中输入 HTTP/HTTPS 网页地址，NexusMind 会抓取网页、识别标题、过滤脚本/样式/导航等非正文内容，提取主要文本并写入 `60-References/Articles` Raw 层。本地 NexusMind Agent / 本地 API 支持 `localhost`、`127.0.0.1`、局域网 IP 和 `.local` 地址；NexusMind Cloud API 仅直接抓取公网网页。两种模式都会限制网页体积与重定向次数。

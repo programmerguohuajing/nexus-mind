@@ -81,3 +81,96 @@ def test_supervisor_supports_repeated_hot_apply(tmp_path, monkeypatch):
         assert supervisor._watcher.is_alive()
     finally:
         supervisor.stop()
+
+def test_cloud_state_becomes_synced_after_successful_sync(tmp_path, monkeypatch):
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    store = AgentConfigStore(tmp_path / "agent.json")
+    config = AgentConfig(
+        folders=[str(folder)],
+        local_api_enabled=False,
+        cloud_url="https://cloud.example",
+        cloud_token="token",
+        data_root=str(tmp_path / "data"),
+    ).normalized()
+    store.save(config)
+    supervisor = AgentSupervisor(store)
+    supervisor.config = config
+
+    monkeypatch.setattr(
+        "nexusmind.agent.runtime.sync_git_activity",
+        lambda **_: {
+            "repository_count": 1,
+            "commit_count": 2,
+            "cloud_sync": {
+                "enabled": True,
+                "delivered": True,
+                "status_code": 200,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "nexusmind.agent.runtime.sync_vault_bidirectional",
+        lambda **_: {
+            "enabled": True,
+            "success": True,
+            "uploaded": 1,
+            "downloaded": 0,
+            "deleted": 0,
+            "conflicts": 0,
+        },
+    )
+
+    supervisor._run_once()
+
+    assert supervisor.status.sync_in_progress is False
+    assert supervisor.status.cloud_state == "synced"
+    assert supervisor.status.cloud_delivered is True
+    assert supervisor.status.cloud_last_sync
+    assert supervisor.status.repository_count == 1
+
+
+def test_cloud_state_reports_partial_failure(tmp_path, monkeypatch):
+    folder = tmp_path / "repo"
+    folder.mkdir()
+    store = AgentConfigStore(tmp_path / "agent.json")
+    config = AgentConfig(
+        folders=[str(folder)],
+        local_api_enabled=False,
+        cloud_url="https://cloud.example",
+        cloud_token="token",
+        data_root=str(tmp_path / "data"),
+    ).normalized()
+    store.save(config)
+    supervisor = AgentSupervisor(store)
+    supervisor.config = config
+
+    monkeypatch.setattr(
+        "nexusmind.agent.runtime.sync_git_activity",
+        lambda **_: {
+            "repository_count": 1,
+            "commit_count": 1,
+            "cloud_sync": {
+                "enabled": True,
+                "delivered": False,
+                "error": "git endpoint failed",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "nexusmind.agent.runtime.sync_vault_bidirectional",
+        lambda **_: {
+            "enabled": True,
+            "success": True,
+            "uploaded": 0,
+            "downloaded": 0,
+            "deleted": 0,
+            "conflicts": 0,
+        },
+    )
+
+    supervisor._run_once()
+
+    assert supervisor.status.cloud_state == "partial"
+    assert supervisor.status.cloud_delivered is True
+    assert "Git 事件同步失败" in supervisor.status.cloud_message

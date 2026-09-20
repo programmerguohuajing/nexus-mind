@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from datetime import date, datetime, time, timedelta
@@ -103,6 +104,9 @@ def discover_repositories(
 
 
 def _git(repo: Path, *args: str) -> str:
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
@@ -110,6 +114,7 @@ def _git(repo: Path, *args: str) -> str:
         encoding="utf-8",
         errors="replace",
         check=False,
+        creationflags=creationflags,
     )
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
@@ -118,6 +123,33 @@ def _repository_user(repo: Path) -> Dict[str, str]:
     return {
         "name": _git(repo, "config", "--get", "user.name").strip(),
         "email": _git(repo, "config", "--get", "user.email").strip().lower(),
+    }
+
+
+def _pull_repository(repo: Path) -> Dict[str, Any]:
+    remote = _git(repo, "config", "--get", "remote.origin.url").strip()
+    branch = _git(repo, "branch", "--show-current").strip()
+    if not remote:
+        return {"attempted": False, "success": True, "status": "skipped", "message": "未配置 origin remote"}
+    if not branch:
+        return {"attempted": False, "success": True, "status": "skipped", "message": "当前为 detached HEAD"}
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "pull", "--ff-only"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        creationflags=creationflags,
+    )
+    message = (proc.stdout or proc.stderr or "").strip()
+    return {
+        "attempted": True,
+        "success": proc.returncode == 0,
+        "status": "success" if proc.returncode == 0 else "failed",
+        "message": message,
     }
 
 
@@ -182,6 +214,7 @@ def _working_tree(repo: Path) -> Dict[str, Any]:
 
 def collect_repository(repo: Path, day: Optional[date] = None) -> Dict[str, Any]:
     day = day or date.today()
+    pull = _pull_repository(repo)
     current_user = _repository_user(repo)
     commits = _commit_rows(repo, day)
     tags = _tag_rows(repo, day)
@@ -197,6 +230,7 @@ def collect_repository(repo: Path, day: Optional[date] = None) -> Dict[str, Any]
         "remote": remote,
         "current_user": current_user,
         "current_user_identified": bool(current_user["email"]),
+        "pull": pull,
         "commits": commits,
         "commit_count": len(commits),
         "merge_count": sum(1 for item in commits if item["is_merge"]),
@@ -227,8 +261,9 @@ def _managed_block(snapshots: List[Dict[str, Any]], synced_at: str) -> str:
             f"- 项目活动：[[20-Projects/Repositories/{slug}/Repository-Activity|{repo['name']}]]",
             f"- 仓库：{repo['path']}",
             f"- 分支：{repo['branch']}",
-            f"- 采集用户：{repo['current_user']['name'] or 'Unknown'} <{repo['current_user']['email'] or '未配置 user.email'}>",
-            f"- 今日提交：{repo['commit_count']} 个；Merge/PR 线索：{repo['merge_count']} 个；Tag：{repo['tag_count']} 个",
+            f"- 当前仓库用户：{repo['current_user']['name'] or 'Unknown'} <{repo['current_user']['email'] or '未配置 user.email'}>",
+            f"- Git Pull：{'成功' if repo['pull']['success'] else '失败'}（{repo['pull']['message'] or repo['pull']['status']}）",
+            f"- 今日全部用户提交：{repo['commit_count']} 个；Merge/PR 线索：{repo['merge_count']} 个；Tag：{repo['tag_count']} 个",
             f"- 工作区：{'有未提交变更' if tree['dirty'] else '干净'}（{tree['changed_count']} 个文件）",
         ])
         for commit in repo["commits"]:
@@ -296,7 +331,8 @@ tags:
 ## 当前状态
 - 路径：{repo['path']}
 - 分支：{repo['branch']}
-- 采集用户：{repo['current_user']['name'] or 'Unknown'} <{repo['current_user']['email'] or '未配置 user.email'}>
+- 当前仓库用户：{repo['current_user']['name'] or 'Unknown'} <{repo['current_user']['email'] or '未配置 user.email'}>
+- Git Pull：{'成功' if repo['pull']['success'] else '失败'}（{repo['pull']['message'] or repo['pull']['status']}）
 - Remote：{repo['remote'] or '未配置'}
 - 工作区：{'有未提交变更' if tree['dirty'] else '干净'}（{tree['changed_count']} 个文件）
 - 今日 Tag：{tags}

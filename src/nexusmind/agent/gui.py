@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import sys
+import time
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, Qt, Signal, QSettings
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPixmap
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -41,6 +44,59 @@ class StatusBridge(QObject):
     changed = Signal(object)
 
 
+class PreferenceButton(QPushButton):
+    def __init__(self, text: str, menu: QMenu, parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self._popup_menu = menu
+        self._menu_open = False
+        self.setObjectName("preferenceButton")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(116, 34)
+        self.clicked.connect(self._toggle_menu)
+        self._popup_menu.aboutToShow.connect(self._on_menu_show)
+        self._popup_menu.aboutToHide.connect(self._on_menu_hide)
+
+    def _toggle_menu(self) -> None:
+        if self._menu_open:
+            self._popup_menu.close()
+            return
+        self._popup_menu.setFixedWidth(self.width())
+        self._popup_menu.popup(self.mapToGlobal(QPoint(0, self.height() + 6)))
+
+    def _on_menu_show(self) -> None:
+        self._menu_open = True
+        self.setProperty("menuOpen", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def _on_menu_hide(self) -> None:
+        self._menu_open = False
+        self.setProperty("menuOpen", False)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        cx = self.width() - 17
+        cy = self.height() // 2
+        if self._menu_open:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#DDEEFF"))
+            painter.drawEllipse(cx - 9, cy - 9, 18, 18)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor("#0877E4"), 2.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawLine(cx - 5, cy + 2, cx, cy - 3)
+            painter.drawLine(cx, cy - 3, cx + 5, cy + 2)
+        else:
+            painter.setPen(QPen(QColor("#60758F"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawLine(cx - 4, cy - 2, cx, cy + 2)
+            painter.drawLine(cx, cy + 2, cx + 4, cy - 2)
+
+
 class AgentWindow(QMainWindow):
     def __init__(self, store: AgentConfigStore):
         super().__init__()
@@ -49,12 +105,16 @@ class AgentWindow(QMainWindow):
         self.bridge.changed.connect(self._render_status)
         self.supervisor = AgentSupervisor(store, self.bridge.changed.emit)
         self._quitting = False
+        self.ui_settings = QSettings("NexusMind", "NexusMindAgent")
+        self.ui_language = str(self.ui_settings.value("ui/language", "zh-CN"))
+        self.ui_theme = str(self.ui_settings.value("ui/theme", "system"))
 
         self.setWindowTitle("NexusMind Agent")
         self.resize(720, 760)
         self._build_ui()
         self._build_tray()
         self._load_config(store.load())
+        self._apply_language()
         self.supervisor.start()
 
 
@@ -92,6 +152,35 @@ class AgentWindow(QMainWindow):
         scroll.setWidget(root)
         self.setCentralWidget(scroll)
 
+    def _preference_button(
+        self,
+        current_value: str,
+        items: list[tuple[str, str]],
+        tooltip: str,
+        callback,
+    ) -> QPushButton:
+        current_label = next(
+            (label for label, value in items if value == current_value),
+            items[0][0],
+        )
+
+        menu = QMenu(self)
+        menu.setObjectName("preferenceMenu")
+        menu.setFixedWidth(116)
+        for label, value in items:
+            action = QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(value == current_value)
+            action.setData(value)
+            action.triggered.connect(
+                lambda _checked=False, selected=value: callback(selected)
+            )
+            menu.addAction(action)
+
+        button = PreferenceButton(current_label, menu, self)
+        button.setToolTip(tooltip)
+        return button
+
     def _hero_section(self) -> QFrame:
         card = QFrame()
         card.setObjectName("heroCard")
@@ -124,9 +213,46 @@ class AgentWindow(QMainWindow):
         text_col.addWidget(subtitle)
         row.addLayout(text_col, 1)
 
+        prefs = QHBoxLayout()
+        prefs.setSpacing(8)
+
+        self.language_select = self._preference_button(
+            self.ui_language,
+            [("中文", "zh-CN"), ("English", "en-US")],
+            "语言 / Language",
+            self._change_language,
+        )
+        theme_items = (
+            [
+                ("System", "system"),
+                ("Light", "light"),
+                ("Dark", "dark"),
+                ("Ocean", "ocean"),
+                ("Forest", "forest"),
+            ]
+            if self.ui_language == "en-US"
+            else [
+                ("跟随系统", "system"),
+                ("浅色", "light"),
+                ("深色", "dark"),
+                ("海洋", "ocean"),
+                ("森林", "forest"),
+            ]
+        )
+        self.theme_select = self._preference_button(
+            self.ui_theme,
+            theme_items,
+            "主题 / Theme",
+            self._change_theme,
+        )
+        prefs.addWidget(self.language_select)
+        prefs.addWidget(self.theme_select)
+        row.addLayout(prefs)
+
         self.status_pill = QLabel("● 正在启动")
         self.status_pill.setObjectName("statusPill")
-        self.status_pill.setAlignment(Qt.AlignCenter)
+        self.status_pill.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.status_pill.setFixedWidth(72)
         row.addWidget(self.status_pill)
         return card
 
@@ -137,10 +263,10 @@ class AgentWindow(QMainWindow):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(12)
 
-        self.api_summary = self._metric_card("本地服务", "启动中", "API")
-        self.cloud_summary = self._metric_card("云端同步", "未配置", "Cloud")
-        self.repo_summary = self._metric_card("采集仓库", "0", "Repositories")
-        self.sync_summary = self._metric_card("最近同步", "暂无", "Last Sync")
+        self.api_summary = self._metric_card("本地服务", "启动中", "接口服务")
+        self.cloud_summary = self._metric_card("云端同步", "未配置", "远端服务")
+        self.repo_summary = self._metric_card("采集仓库", "0", "仓库数量")
+        self.sync_summary = self._metric_card("最近同步", "暂无", "同步时间")
 
         for index, widget in enumerate(
             [
@@ -230,7 +356,7 @@ class AgentWindow(QMainWindow):
         layout.addLayout(
             self._section_header(
                 "云端同步",
-                "连接 Cloudflare Worker 或其他 NexusMind Cloud API。",
+                "连接 NexusMind Cloud API，实现云端同步与远端能力访问。",
             )
         )
 
@@ -238,7 +364,7 @@ class AgentWindow(QMainWindow):
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
         self.cloud_url = QLineEdit()
-        self.cloud_url.setPlaceholderText("https://nexusmind.example.workers.dev")
+        self.cloud_url.setPlaceholderText("https://cloud.example.com")
         self.cloud_token = QLineEdit()
         self.cloud_token.setEchoMode(QLineEdit.Password)
         self.cloud_token.setPlaceholderText("SYNC_TOKEN")
@@ -339,12 +465,24 @@ class AgentWindow(QMainWindow):
         self.sync_button = QPushButton("立即同步")
         self.sync_button.setObjectName("secondaryButton")
         self.sync_button.clicked.connect(self.supervisor.sync_now)
+        self.sync_progress = QProgressBar()
+        self.sync_progress.setObjectName("syncProgress")
+        self.sync_progress.setRange(0, 0)
+        self.sync_progress.setTextVisible(False)
+        self.sync_progress.setFixedWidth(120)
+        self.sync_progress.setFixedHeight(8)
+        self.sync_progress.hide()
+        self.sync_progress_label = QLabel("正在双向同步知识库…")
+        self.sync_progress_label.setObjectName("syncProgressLabel")
+        self.sync_progress_label.hide()
         self.open_button = QPushButton("打开 Web 管理台")
         self.open_button.setObjectName("secondaryButton")
         self.open_button.clicked.connect(self._open_local_console)
 
         row.addWidget(self.save_button)
         row.addWidget(self.sync_button)
+        row.addWidget(self.sync_progress)
+        row.addWidget(self.sync_progress_label)
         row.addStretch(1)
         row.addWidget(self.open_button)
         return card
@@ -363,6 +501,87 @@ class AgentWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(self.status_label)
         return card
+
+    def _change_language(self, language: str, *_args) -> None:
+        language = language or "zh-CN"
+        if language == self.ui_language:
+            return
+        self.ui_language = str(language)
+        self.ui_settings.setValue("ui/language", self.ui_language)
+        config = self.store.load()
+        self._build_ui()
+        self._load_config(config)
+        self._apply_language()
+
+    def _change_theme(self, theme: str, *_args) -> None:
+        theme = theme or "system"
+        if theme == self.ui_theme:
+            return
+        self.ui_theme = str(theme)
+        self.ui_settings.setValue("ui/theme", self.ui_theme)
+        config = self.store.load()
+        self._build_ui()
+        self._load_config(config)
+        self._apply_language()
+
+    def _apply_language(self) -> None:
+        if self.ui_language != "en-US":
+            return
+
+        translations = {
+            "本地知识采集、Git 活动同步与云端连接控制中心": "Local knowledge collection, Git activity sync, and cloud connectivity",
+            "● 正在启动": "● Starting",
+            "本地服务": "Local Service",
+            "启动中": "Starting",
+            "接口服务": "API Service",
+            "云端同步": "Cloud Sync",
+            "未配置": "Not configured",
+            "远端服务": "Remote Service",
+            "采集仓库": "Repositories",
+            "仓库数量": "Repository Count",
+            "最近同步": "Last Sync",
+            "暂无": "None",
+            "同步时间": "Sync Time",
+            "运行 NexusMind 本地 API 和 Web 管理台。": "Run the NexusMind local API and web console.",
+            "启用本地服务": "Enable local service",
+            "选择": "Browse",
+            "数据目录": "Data directory",
+            "连接 NexusMind Cloud API，实现云端同步与远端能力访问。": "Connect to NexusMind Cloud API for synchronization and remote capabilities.",
+            "云端地址": "Cloud endpoint",
+            "同步令牌": "Sync token",
+            "测试连接": "Test connection",
+            "Git 采集目录": "Git Collection Folders",
+            "支持多次添加 Git 仓库或包含多个仓库的上级目录。": "Add Git repositories or parent folders containing multiple repositories.",
+            "＋ 添加文件夹": "＋ Add Folder",
+            "移除选中": "Remove Selected",
+            "运行偏好": "Runtime Preferences",
+            "控制同步频率以及系统登录后的 Agent 行为。": "Control sync frequency and Agent behavior after sign-in.",
+            "同步周期": "Sync interval",
+            "登录系统后自动启动": "Start automatically after sign-in",
+            "启动后直接最小化到托盘": "Start minimized to tray",
+            "保存并应用": "Save & Apply",
+            "立即同步": "Sync Now",
+            "正在双向同步知识库…": "Synchronizing knowledge base…",
+            "打开 Web 管理台": "Open Web Console",
+            "运行状态": "Runtime Status",
+            "Agent 正在启动…": "Agent is starting…",
+        }
+        for widget_type in (QLabel, QPushButton, QCheckBox, QGroupBox):
+            for widget in self.findChildren(widget_type):
+                if isinstance(widget, QGroupBox):
+                    current = widget.title()
+                    if current in translations:
+                        widget.setTitle(translations[current])
+                elif hasattr(widget, "text"):
+                    current = widget.text()
+                    if current in translations:
+                        widget.setText(translations[current])
+
+        self.sync_interval.setSuffix(" sec")
+        if hasattr(self, "folder_count_label"):
+            text = self.folder_count_label.text()
+            if text.endswith(" 个目录"):
+                self.folder_count_label.setText(text.replace(" 个目录", " folders"))
 
     def _apply_theme(self) -> None:
         check_icon = (app_icon_path().parent / "check.svg").as_posix()
@@ -390,12 +609,64 @@ class AgentWindow(QMainWindow):
                 color: #6B7890;
                 font-size: 12px;
             }
+            QPushButton#preferenceButton {
+                padding: 0 32px 0 11px;
+                border: 1px solid #D4DEEA;
+                border-radius: 8px;
+                background: #F9FBFD;
+                color: #243650;
+                font-size: 12px;
+                font-weight: 600;
+                text-align: left;
+            }
+            QPushButton#preferenceButton:hover {
+                border-color: #1689E6;
+                background: #F7FBFF;
+            }
+            QPushButton#preferenceButton:pressed,
+            QPushButton#preferenceButton[menuOpen="true"] {
+                background: #EDF6FF;
+                border-color: #0F7ED6;
+            }
+            QMenu#preferenceMenu {
+                background: #FFFFFF;
+                color: #243650;
+                border: 1px solid #C8D5E5;
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QMenu#preferenceMenu::item {
+                min-height: 34px;
+                padding: 0 12px 0 34px;
+                margin: 2px 0;
+                border-radius: 7px;
+                background: transparent;
+                color: #243650;
+            }
+            QMenu#preferenceMenu::item:selected {
+                background: #F0F7FF;
+                color: #075EA8;
+            }
+            QMenu#preferenceMenu::item:checked {
+                background: #DDEEFF;
+                color: #075EA8;
+                font-weight: 700;
+            }
+            QMenu#preferenceMenu::indicator {
+                width: 14px;
+                height: 14px;
+                left: 10px;
+            }
+            QMenu#preferenceMenu::indicator:checked {
+                image: url("{check_icon}");
+            }
             QLabel#statusPill {
-                min-width: 88px;
-                padding: 7px 11px;
-                border-radius: 13px;
-                background: #E8F7FF;
-                color: #087CB9;
+                min-width: 0;
+                padding: 0;
+                border: none;
+                background: transparent;
+                color: #0B9A78;
+                font-size: 12px;
                 font-weight: 600;
             }
             QFrame#metricCard {
@@ -577,6 +848,20 @@ class AgentWindow(QMainWindow):
             QPushButton#subtleButton:hover {
                 background: #F3F7FB;
             }
+            QProgressBar#syncProgress {
+                border: 0;
+                border-radius: 4px;
+                background: #E6EEF8;
+            }
+            QProgressBar#syncProgress::chunk {
+                border-radius: 4px;
+                background: #1689E6;
+            }
+            QLabel#syncProgressLabel {
+                color: #5F6D84;
+                font-size: 11px;
+                font-weight: 600;
+            }
             QFrame#actionBar {
                 background: #FFFFFF;
                 border: 1px solid #DCE5F2;
@@ -601,6 +886,52 @@ class AgentWindow(QMainWindow):
             .replace("{up_icon}", up_icon)
             .replace("{down_icon}", down_icon)
         )
+
+        resolved_theme = getattr(self, "ui_theme", "system")
+        if resolved_theme == "system":
+            window_color = QApplication.palette().color(QPalette.Window)
+            resolved_theme = "dark" if window_color.lightness() < 128 else "light"
+
+        theme_overrides = {
+            "dark": """
+                QMainWindow, QWidget#page, QScrollArea { background: #111821; color: #E6EDF3; }
+                QFrame#heroCard, QFrame#metricCard, QGroupBox#configCard, QFrame#actionBar { background: #18212C; border-color: #2D3A49; }
+                QLabel#heroTitle, QLabel#sectionTitle, QLabel#metricValue, QLabel#fieldLabel { color: #E6EDF3; }
+                QLabel#heroSubtitle, QLabel#sectionDescription, QLabel#metricLabel, QLabel#metricHint, QLabel#syncProgressLabel { color: #9EADBC; }
+                QLineEdit, QSpinBox, QListWidget#folderList, QPushButton#preferenceButton { background: #111821; color: #E6EDF3; border-color: #3A4858; }
+                QPushButton#preferenceButton:hover { background: #182432; border-color: #5A8CC4; }
+                QMenu#preferenceMenu { background: #18212C; color: #E6EDF3; border-color: #344253; }
+                QMenu#preferenceMenu::item:selected { background: #203B5D; color: #FFFFFF; }
+                QMenu#preferenceMenu::item:checked { background: #285486; color: #FFFFFF; font-weight: 700; }
+                QCheckBox { color: #D5DEE8; }
+                QFrame#statusCard { background: #14263A; border-color: #274765; }
+                QLabel#statusTitle { color: #82BFFF; }
+                QLabel#statusText { color: #B7C6D6; }
+                QPushButton#subtleButton { background: #18212C; color: #C6D2DF; border-color: #3A4858; }
+            """,
+            "ocean": """
+                QMainWindow, QWidget#page, QScrollArea { background: #EEF7FB; color: #173042; }
+                QFrame#heroCard, QFrame#metricCard, QGroupBox#configCard, QFrame#actionBar { background: #FFFFFF; border-color: #C9DFE8; }
+                QLabel#metricValue { color: #087EA4; }
+                QPushButton#preferenceButton { border-color: #A8CBD9; color: #173042; background: #FFFFFF; }
+                QMenu#preferenceMenu { border-color: #B9D7E2; color: #173042; background: #FFFFFF; }
+                QMenu#preferenceMenu::item:selected { background: #E7F5F9; color: #075E7A; }
+                QMenu#preferenceMenu::item:checked { background: #CFEAF3; color: #075E7A; font-weight: 700; }
+                QFrame#statusCard { background: #E3F3F8; border-color: #BFDFEA; }
+            """,
+            "forest": """
+                QMainWindow, QWidget#page, QScrollArea { background: #F1F6F1; color: #203326; }
+                QFrame#heroCard, QFrame#metricCard, QGroupBox#configCard, QFrame#actionBar { background: #FFFFFF; border-color: #CDDFCE; }
+                QLabel#metricValue { color: #2F7D4A; }
+                QPushButton#preferenceButton { border-color: #B6D0B8; color: #203326; background: #FFFFFF; }
+                QMenu#preferenceMenu { border-color: #C4D9C6; color: #203326; background: #FFFFFF; }
+                QMenu#preferenceMenu::item:selected { background: #E8F3EA; color: #245D37; }
+                QMenu#preferenceMenu::item:checked { background: #D5E9D9; color: #245D37; font-weight: 700; }
+                QFrame#statusCard { background: #E8F3E9; border-color: #C5DEC8; }
+                QLabel#statusTitle { color: #2F7D4A; }
+            """,
+        }
+        stylesheet += theme_overrides.get(resolved_theme, "")
         self.setStyleSheet(stylesheet)
 
     def _build_tray(self) -> None:
@@ -611,15 +942,15 @@ class AgentWindow(QMainWindow):
         self.setWindowIcon(icon)
         menu = QMenu()
         show_action = QAction("打开配置", self)
-        sync_action = QAction("立即同步", self)
+        self.sync_action = QAction("立即同步", self)
         restart_action = QAction("重新加载配置", self)
         quit_action = QAction("退出 NexusMind Agent", self)
         show_action.triggered.connect(self._show_window)
-        sync_action.triggered.connect(self.supervisor.sync_now)
+        self.sync_action.triggered.connect(self.supervisor.sync_now)
         restart_action.triggered.connect(self.supervisor.reload)
         quit_action.triggered.connect(self._quit)
         menu.addAction(show_action)
-        menu.addAction(sync_action)
+        menu.addAction(self.sync_action)
         menu.addAction(restart_action)
         menu.addSeparator()
         menu.addAction(quit_action)
@@ -726,67 +1057,322 @@ class AgentWindow(QMainWindow):
             f"http://{self.local_api_host.text()}:{self.local_api_port.value()}/"
         )
 
+    def _show_cloud_dialog(
+        self,
+        title: str,
+        message: str,
+        *,
+        success: bool,
+        details: list[tuple[str, str]] | None = None,
+        copy_text: str = "",
+    ) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setModal(True)
+        dialog.setFixedWidth(520)
+        dialog.setMinimumHeight(330)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
+
+        header = QHBoxLayout()
+        header.setSpacing(14)
+
+        icon = QLabel("✓" if success else "×")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(44, 44)
+        icon.setObjectName("connectionResultIcon")
+        icon.setProperty("success", success)
+        header.addWidget(icon)
+
+        header_text = QVBoxLayout()
+        header_text.setSpacing(3)
+        title_label = QLabel(title)
+        title_label.setObjectName("connectionResultTitle")
+        state_label = QLabel("连接正常" if success else "连接失败")
+        state_label.setObjectName("connectionResultState")
+        state_label.setProperty("success", success)
+        header_text.addWidget(title_label)
+        header_text.addWidget(state_label)
+        header.addLayout(header_text, 1)
+        layout.addLayout(header)
+
+        message_label = QLabel(message)
+        message_label.setObjectName("connectionResultMessage")
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
+
+        detail_card = QFrame()
+        detail_card.setObjectName("connectionDetailCard")
+        detail_layout = QGridLayout(detail_card)
+        detail_layout.setContentsMargins(14, 12, 14, 12)
+        detail_layout.setHorizontalSpacing(18)
+        detail_layout.setVerticalSpacing(9)
+
+        for row, (label, value) in enumerate(details or []):
+            key_label = QLabel(label)
+            key_label.setObjectName("connectionDetailKey")
+            value_label = QLabel(value or "-")
+            value_label.setObjectName("connectionDetailValue")
+            value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value_label.setWordWrap(True)
+            detail_layout.addWidget(key_label, row, 0, Qt.AlignTop)
+            detail_layout.addWidget(value_label, row, 1, Qt.AlignTop)
+
+        layout.addWidget(detail_card)
+        layout.addStretch(1)
+
+        actions = QHBoxLayout()
+        copy_button = QPushButton("复制详情")
+        copy_button.setObjectName("connectionSecondaryButton")
+        close_button = QPushButton("关闭")
+        close_button.setObjectName("connectionPrimaryButton")
+        close_button.setDefault(True)
+        copy_button.clicked.connect(
+            lambda: QApplication.clipboard().setText(copy_text)
+        )
+        close_button.clicked.connect(dialog.accept)
+        actions.addWidget(copy_button)
+        actions.addStretch(1)
+        actions.addWidget(close_button)
+        layout.addLayout(actions)
+
+        dialog.setStyleSheet("""
+            QDialog {
+                background: #F7F9FC;
+                color: #172033;
+                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+                font-size: 13px;
+            }
+            QLabel#connectionResultIcon {
+                border-radius: 22px;
+                font-size: 23px;
+                font-weight: 800;
+            }
+            QLabel#connectionResultIcon[success="true"] {
+                background: #E8F8F1;
+                color: #12815F;
+                border: 1px solid #B9E8D7;
+            }
+            QLabel#connectionResultIcon[success="false"] {
+                background: #FFF0F2;
+                color: #C43E56;
+                border: 1px solid #F2C7CE;
+            }
+            QLabel#connectionResultTitle {
+                color: #172033;
+                font-size: 17px;
+                font-weight: 700;
+            }
+            QLabel#connectionResultState {
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QLabel#connectionResultState[success="true"] { color: #12815F; }
+            QLabel#connectionResultState[success="false"] { color: #C43E56; }
+            QLabel#connectionResultMessage {
+                color: #68778E;
+                line-height: 1.4;
+            }
+            QFrame#connectionDetailCard {
+                background: #FFFFFF;
+                border: 1px solid #DDE5F0;
+                border-radius: 10px;
+            }
+            QLabel#connectionDetailKey {
+                min-width: 82px;
+                color: #8390A4;
+                font-size: 12px;
+            }
+            QLabel#connectionDetailValue {
+                color: #26364F;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton#connectionPrimaryButton,
+            QPushButton#connectionSecondaryButton {
+                min-height: 34px;
+                padding: 0 16px;
+                border-radius: 7px;
+                font-weight: 600;
+            }
+            QPushButton#connectionPrimaryButton {
+                color: #FFFFFF;
+                background: #0877E4;
+                border: 1px solid #086AD8;
+            }
+            QPushButton#connectionPrimaryButton:hover {
+                background: #0069D5;
+            }
+            QPushButton#connectionSecondaryButton {
+                color: #52637C;
+                background: #FFFFFF;
+                border: 1px solid #D1DBE8;
+            }
+            QPushButton#connectionSecondaryButton:hover {
+                background: #F0F5FA;
+            }
+        """)
+        dialog.exec()
+
     def _test_cloud(self) -> None:
         url = self.cloud_url.text().strip().rstrip("/")
+        token = self.cloud_token.text().strip()
+        endpoint = url + "/api/cloud/vault/manifest" if url else ""
         if not url:
-            QMessageBox.information(self, "Cloud API", "请先填写 Cloud API URL。")
+            self._show_cloud_dialog(
+                "无法测试连接",
+                "还没有配置云端服务地址，请填写 Cloud API URL 后再试。",
+                success=False,
+                details=[("检查项", "Cloud API URL"), ("状态", "未配置")],
+                copy_text="Cloud API URL 未配置",
+            )
             return
+        if not token:
+            self._show_cloud_dialog(
+                "无法测试连接",
+                "还没有配置同步令牌，请填写与 Worker SYNC_TOKEN 相同的值。",
+                success=False,
+                details=[("检查项", "SYNC_TOKEN"), ("状态", "未配置")],
+                copy_text="SYNC_TOKEN 未配置",
+            )
+            return
+
+        started = time.perf_counter()
+        response = None
         try:
             import httpx
 
-            response = httpx.get(url + "/health", timeout=5.0)
+            response = httpx.get(
+                endpoint,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=8.0,
+            )
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
             response.raise_for_status()
+            payload = response.json()
+            note_count = len(payload.get("notes", []))
+            tombstone_count = len(payload.get("tombstones", []))
+
             self.cloud_summary.value_label.setText("连接正常")
-            self.cloud_summary.value_label.setStyleSheet("color: #087CB9;")
-            QMessageBox.information(
-                self,
-                "云端连接",
-                f"连接成功 · HTTP {response.status_code}",
+            self.cloud_summary.value_label.setStyleSheet("color: #12815F;")
+            details = [
+                ("服务地址", url),
+                ("HTTP 状态", str(response.status_code)),
+                ("响应耗时", f"{elapsed_ms} ms"),
+                ("Token 验证", "已通过"),
+                ("云端知识文件", str(note_count)),
+                ("删除标记", str(tombstone_count)),
+            ]
+            copy_text = "\n".join(
+                ["NexusMind Cloud 连接测试", *[
+                    f"{key}: {value}" for key, value in details
+                ]]
+            )
+            self._show_cloud_dialog(
+                "Cloud API 连接测试",
+                "服务可访问，SYNC_TOKEN 已验证，双向同步接口正常。",
+                success=True,
+                details=details,
+                copy_text=copy_text,
             )
         except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
             self.cloud_summary.value_label.setText("连接失败")
-            self.cloud_summary.value_label.setStyleSheet("color: #C33C54;")
-            QMessageBox.critical(self, "云端连接失败", str(exc))
+            self.cloud_summary.value_label.setStyleSheet("color: #C43E56;")
+            http_status = getattr(response, "status_code", None)
+            message = (
+                "SYNC_TOKEN 验证失败，请确认本地令牌与 Worker 的 SYNC_TOKEN 完全一致。"
+                if http_status == 401
+                else "未能通过双向同步接口检查，请检查地址、网络或云端服务状态。"
+            )
+            details = [
+                ("服务地址", url),
+                ("测试接口", endpoint),
+                ("HTTP 状态", str(http_status or "-")),
+                ("耗时", f"{elapsed_ms} ms"),
+                ("错误类型", type(exc).__name__),
+                ("错误原因", str(exc)),
+            ]
+            copy_text = "\n".join(
+                ["NexusMind Cloud 连接测试失败", *[
+                    f"{key}: {value}" for key, value in details
+                ]]
+            )
+            self._show_cloud_dialog(
+                "Cloud API 连接测试",
+                message,
+                success=False,
+                details=details,
+                copy_text=copy_text,
+            )
 
     def _render_status(self, status: AgentStatus) -> None:
         running = status.state == "running"
         error = status.state == "error"
-        api = "运行中" if status.api_running else "未启用"
-        cloud_configured = bool(self.cloud_url.text().strip())
-        cloud = (
-            "已同步"
-            if status.cloud_delivered
-            else ("等待同步" if cloud_configured else "未配置")
-        )
+        english = self.ui_language == "en-US"
+        api = ("Running" if status.api_running else "Disabled") if english else ("运行中" if status.api_running else "未启用")
+        cloud_labels = ({
+            "unconfigured": "Not configured",
+            "incomplete": "Incomplete",
+            "syncing": "Syncing",
+            "synced": "Synced",
+            "partial": "Partial failure",
+            "error": "Sync failed",
+        } if english else {
+            "unconfigured": "未配置",
+            "incomplete": "配置不完整",
+            "syncing": "同步中",
+            "synced": "已同步",
+            "partial": "部分失败",
+            "error": "同步失败",
+        })
+        cloud = cloud_labels.get(status.cloud_state, "Not configured" if english else "未配置")
 
-        if error:
-            self.status_pill.setText("● 异常")
-            self.status_pill.setStyleSheet(
-                "background:#FFF0F2;color:#C33C54;padding:7px 11px;"
-                "border-radius:13px;font-weight:600;"
-            )
+        self.sync_button.setEnabled(not status.sync_in_progress)
+        self.sync_button.setText(("Syncing…" if status.sync_in_progress else "Sync Now") if english else ("同步中…" if status.sync_in_progress else "立即同步"))
+        self.sync_progress.setVisible(status.sync_in_progress)
+        self.sync_progress_label.setVisible(status.sync_in_progress)
+        if hasattr(self, "sync_action"):
+            self.sync_action.setEnabled(not status.sync_in_progress)
+            self.sync_action.setText(("Syncing…" if status.sync_in_progress else "Sync Now") if english else ("正在同步…" if status.sync_in_progress else "立即同步"))
+
+        if status.sync_in_progress:
+            self.status_pill.setText("●  Syncing" if english else "●  同步中")
+            self.status_pill.setStyleSheet("color:#0877E4;font-weight:600;")
+        elif error:
+            self.status_pill.setText("●  Error" if english else "●  异常")
+            self.status_pill.setStyleSheet("color:#C33C54;font-weight:600;")
         elif running:
-            self.status_pill.setText("● 运行中")
-            self.status_pill.setStyleSheet(
-                "background:#E9FAF4;color:#11835F;padding:7px 11px;"
-                "border-radius:13px;font-weight:600;"
-            )
+            self.status_pill.setText("●  Running" if english else "●  运行中")
+            self.status_pill.setStyleSheet("color:#11835F;font-weight:600;")
         else:
-            self.status_pill.setText("● 已停止")
-            self.status_pill.setStyleSheet(
-                "background:#EEF2F7;color:#68768C;padding:7px 11px;"
-                "border-radius:13px;font-weight:600;"
-            )
+            self.status_pill.setText("●  Stopped" if english else "●  已停止")
+            self.status_pill.setStyleSheet("color:#68768C;font-weight:600;")
 
         self.api_summary.value_label.setText(api)
         self.cloud_summary.value_label.setText(cloud)
         self.repo_summary.value_label.setText(str(status.repository_count))
-        self.sync_summary.value_label.setText(status.last_sync or "暂无")
-        self.status_label.setText(
-            f"本地服务：{api}　·　云端：{cloud}　·　"
-            f"仓库：{status.repository_count}　·　Commit：{status.commit_count}\n"
-            f"{status.message or 'Agent 正常运行'}"
+        self.sync_summary.value_label.setText(
+            ("Syncing…" if english else "同步中…") if status.sync_in_progress else (status.last_sync or ("None" if english else "暂无"))
         )
+        if status.sync_in_progress:
+            status_message = "Collecting Git activity and synchronizing the local and cloud knowledge base…" if english else "正在采集 Git 活动并执行本地与云端知识库双向同步，请稍候…"
+        else:
+            status_message = status.message or ("Agent is running normally" if english else "Agent 正常运行")
+        if english:
+            self.status_label.setText(
+                f"Local service: {api} · Cloud: {cloud} · "
+                f"Repositories: {status.repository_count} · Commits: {status.commit_count}\n"
+                f"{status_message}"
+            )
+        else:
+            self.status_label.setText(
+                f"本地服务：{api}　·　云端：{cloud}　·　"
+                f"仓库：{status.repository_count}　·　Commit：{status.commit_count}\n"
+                f"{status_message}"
+            )
 
 
     def _show_window(self) -> None:
