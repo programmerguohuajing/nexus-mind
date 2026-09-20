@@ -106,6 +106,40 @@ def web_console():
     return FileResponse(WEB_DIR / "index.html")
 
 
+@app.get("/styles.css", include_in_schema=False)
+def web_styles():
+    return FileResponse(WEB_DIR / "styles.css", media_type="text/css")
+
+
+@app.get("/app.js", include_in_schema=False)
+def web_app_js():
+    return FileResponse(
+        WEB_DIR / "app.js",
+        media_type="application/javascript",
+    )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def web_favicon():
+    return FileResponse(
+        WEB_DIR / "favicon.ico",
+        media_type="image/x-icon",
+    )
+
+
+@app.get("/assets/{asset_path:path}", include_in_schema=False)
+def web_asset(asset_path: str):
+    asset_root = (WEB_DIR / "assets").resolve()
+    target = (asset_root / asset_path).resolve()
+    try:
+        target.relative_to(asset_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid asset path") from exc
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return FileResponse(target)
+
+
 @app.get("/api/dashboard")
 def dashboard_summary():
     markdown_files = list(VAULT_ROOT.rglob("*.md"))
@@ -585,4 +619,3 @@ def vault_weekly_review_endpoint(req: ReviewRequest):
 
 
 app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web-root")
