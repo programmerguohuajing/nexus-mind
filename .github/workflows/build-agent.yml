@@ -17,11 +17,19 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: NexusMindAgent-windows
-          - os: macos-latest
-            artifact: NexusMindAgent-macos
+            artifact: agent-windows-x64
+            asset: NexusMindAgent-Windows-x64.exe
           - os: ubuntu-latest
-            artifact: NexusMindAgent-linux
+            artifact: agent-linux-x64
+            asset: NexusMindAgent-Linux-x64
+          - os: macos-15-intel
+            artifact: agent-macos-intel-x64
+            asset: NexusMindAgent-macOS-Intel-x64.dmg
+            expected_arch: x86_64
+          - os: macos-latest
+            artifact: agent-macos-apple-silicon-arm64
+            asset: NexusMindAgent-macOS-AppleSilicon-arm64.dmg
+            expected_arch: arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -38,30 +46,46 @@ jobs:
       - name: Build Agent
         run: python packaging/build_agent.py
 
-      - name: Archive macOS app
-        if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/NexusMindAgent.app dist/NexusMindAgent-macos.zip
-
-      - name: Upload Windows artifact
+      - name: Prepare Windows executable
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/NexusMindAgent.exe
+        shell: pwsh
+        run: |
+          Move-Item dist\NexusMindAgent.exe "dist\${{ matrix.asset }}"
 
-      - name: Upload Linux artifact
+      - name: Prepare Linux executable
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/NexusMindAgent
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv dist/NexusMindAgent "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
 
-      - name: Upload macOS artifact
+      - name: Verify macOS architecture and create DMG
         if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_ARCH="$(uname -m)"
+          EXPECTED_ARCH="${{ matrix.expected_arch }}"
+          echo "Runner architecture: $ACTUAL_ARCH"
+          test "$ACTUAL_ARCH" = "$EXPECTED_ARCH"
+          file dist/NexusMindAgent.app/Contents/MacOS/NexusMindAgent
+          mkdir -p dmg-root
+          cp -R dist/NexusMindAgent.app dmg-root/
+          ln -s /Applications dmg-root/Applications
+          hdiutil create \
+            -volname "NexusMind Agent" \
+            -srcfolder dmg-root \
+            -ov \
+            -format UDZO \
+            "dist/${{ matrix.asset }}"
+
+      - name: Upload platform artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/NexusMindAgent-macos.zip
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -74,19 +98,19 @@ jobs:
         with:
           path: release-input
 
-      - name: Package release assets
+      - name: Collect flat release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets
-
-          (cd release-input/NexusMindAgent-windows && zip -9 ../../release-assets/NexusMindAgent-Windows.zip NexusMindAgent.exe)
-          cp release-input/NexusMindAgent-macos/NexusMindAgent-macos.zip release-assets/NexusMindAgent-macOS.zip
-
-          chmod +x release-input/NexusMindAgent-linux/NexusMindAgent
-          tar -C release-input/NexusMindAgent-linux -czf release-assets/NexusMindAgent-Linux.tar.gz NexusMindAgent
-
-          (cd release-assets && sha256sum NexusMindAgent-Windows.zip NexusMindAgent-macOS.zip NexusMindAgent-Linux.tar.gz > SHA256SUMS.txt)
+          find release-input -mindepth 2 -maxdepth 2 -type f -exec cp {} release-assets/ \;
+          cd release-assets
+          test -f NexusMindAgent-Windows-x64.exe
+          test -f NexusMindAgent-Linux-x64
+          test -f NexusMindAgent-macOS-Intel-x64.dmg
+          test -f NexusMindAgent-macOS-AppleSilicon-arm64.dmg
+          sha256sum NexusMindAgent-* > SHA256SUMS.txt
+          ls -lh
 
       - name: Create GitHub Release
         env:
@@ -97,10 +121,17 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           TITLE="NexusMind ${TAG#v}"
-          NOTES=$'NexusMind '"${TAG#v}"$'\n\nAgent packages:\n- Windows\n- macOS\n- Linux\n\nCloudflare / Local / Docker deployment support is included in this release.'
+          NOTES=$'NexusMind '"${TAG#v}"$'\n\nAgent downloads:\n- Windows x64: NexusMindAgent-Windows-x64.exe\n- Linux x64: NexusMindAgent-Linux-x64\n- macOS Intel x64: NexusMindAgent-macOS-Intel-x64.dmg\n- macOS Apple Silicon (M-series) arm64: NexusMindAgent-macOS-AppleSilicon-arm64.dmg\n\nSHA256SUMS.txt contains checksums for all platform assets.'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
+            while IFS= read -r asset; do
+              [ -n "$asset" ] && gh release delete-asset "$TAG" "$asset" --yes
+            done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
+            gh release upload "$TAG" release-assets/*
           else
-            gh release create "$TAG"               release-assets/*               --title "$TITLE"               --notes "$NOTES"               --verify-tag
+            gh release create "$TAG" \
+              release-assets/* \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --verify-tag
           fi
