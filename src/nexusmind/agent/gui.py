@@ -368,8 +368,7 @@ class AgentWindow(QMainWindow):
         check_icon = (app_icon_path().parent / "check.svg").as_posix()
         up_icon = (app_icon_path().parent / "chevron-up.svg").as_posix()
         down_icon = (app_icon_path().parent / "chevron-down.svg").as_posix()
-        self.setStyleSheet(
-            f"""
+        stylesheet = """
             QMainWindow, QWidget#page, QScrollArea {
                 background: #F5F8FC;
                 color: #172033;
@@ -597,7 +596,13 @@ class AgentWindow(QMainWindow):
                 font-size: 12px;
             }
             """
+        stylesheet = (
+            stylesheet.replace("{check_icon}", check_icon)
+            .replace("{up_icon}", up_icon)
+            .replace("{down_icon}", down_icon)
         )
+        self.setStyleSheet(stylesheet)
+
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
         icon_path = app_icon_path()
