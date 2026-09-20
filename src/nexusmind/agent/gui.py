@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
 import time
 import webbrowser
+
+import psutil
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, Signal, QSettings
@@ -27,6 +30,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSystemTrayIcon,
     QStyle,
@@ -34,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from nexusmind import __version__
 from nexusmind.agent.autostart import set_autostart
 from nexusmind.agent.brand import app_icon_path
 from nexusmind.agent.configuration import AgentConfig, AgentConfigStore
@@ -333,6 +338,8 @@ class AgentWindow(QMainWindow):
         self.local_api_host.setPlaceholderText("127.0.0.1")
         self.local_api_port = QSpinBox()
         self.local_api_port.setRange(1, 65535)
+        self.local_api_port.setMinimumWidth(180)
+        self.local_api_port.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.data_root = QLineEdit()
         browse = QPushButton("选择")
         browse.setObjectName("subtleButton")
@@ -591,7 +598,7 @@ class AgentWindow(QMainWindow):
             QMainWindow, QWidget#page, QScrollArea {
                 background: #F5F8FC;
                 color: #172033;
-                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+                font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Noto Sans", "Ubuntu", "DejaVu Sans", sans-serif;
                 font-size: 13px;
             }
             QScrollArea { border: 0; }
@@ -1069,12 +1076,49 @@ class AgentWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setModal(True)
+        dialog.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        dialog.setAttribute(Qt.WA_TranslucentBackground, True)
         dialog.setFixedWidth(520)
-        dialog.setMinimumHeight(330)
+        dialog.setMinimumHeight(360)
 
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(16)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(8, 8, 8, 8)
+
+        surface = QFrame()
+        surface.setObjectName("connectionDialogSurface")
+        outer.addWidget(surface)
+
+        layout = QVBoxLayout(surface)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        title_bar = QFrame()
+        title_bar.setObjectName("connectionTitleBar")
+        title_bar.setFixedHeight(46)
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(18, 0, 10, 0)
+        title_layout.setSpacing(8)
+
+        window_title = QLabel("NexusMind · 云端连接")
+        window_title.setObjectName("connectionWindowTitle")
+        title_layout.addWidget(window_title)
+        title_layout.addStretch(1)
+
+        window_close = QPushButton("×")
+        window_close.setObjectName("connectionWindowClose")
+        window_close.setFixedSize(30, 30)
+        window_close.clicked.connect(dialog.reject)
+        title_layout.addWidget(window_close)
+        layout.addWidget(title_bar)
+
+        body = QWidget()
+        body.setObjectName("connectionDialogBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 20, 24, 22)
+        body_layout.setSpacing(16)
+        layout.addWidget(body)
+
+        layout = body_layout
 
         header = QHBoxLayout()
         header.setSpacing(14)
@@ -1140,10 +1184,48 @@ class AgentWindow(QMainWindow):
 
         dialog.setStyleSheet("""
             QDialog {
-                background: #F7F9FC;
+                background: transparent;
                 color: #172033;
-                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+                font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Noto Sans", "Ubuntu", "DejaVu Sans", sans-serif;
                 font-size: 13px;
+            }
+            QFrame#connectionDialogSurface {
+                background: #F7F9FC;
+                border: 1px solid #D9E2EE;
+                border-radius: 14px;
+            }
+            QFrame#connectionTitleBar {
+                background: #FFFFFF;
+                border: none;
+                border-bottom: 1px solid #E1E7F0;
+                border-top-left-radius: 14px;
+                border-top-right-radius: 14px;
+            }
+            QWidget#connectionDialogBody {
+                background: #F7F9FC;
+                border: none;
+                border-bottom-left-radius: 14px;
+                border-bottom-right-radius: 14px;
+            }
+            QLabel#connectionWindowTitle {
+                color: #26364F;
+                font-size: 13px;
+                font-weight: 700;
+                border: none;
+                background: transparent;
+            }
+            QPushButton#connectionWindowClose {
+                border: none;
+                border-radius: 7px;
+                background: transparent;
+                color: #718096;
+                font-size: 20px;
+                font-weight: 400;
+                padding: 0;
+            }
+            QPushButton#connectionWindowClose:hover {
+                background: #EEF2F7;
+                color: #25364D;
             }
             QLabel#connectionResultIcon {
                 border-radius: 22px;
@@ -1407,15 +1489,66 @@ class AgentWindow(QMainWindow):
         QApplication.instance().quit()
 
 
-def _notify_existing_instance() -> bool:
+INSTANCE_SERVER = "NexusMindAgent"
+
+
+def _send_instance_command(command: str, wait_for_reply: bool = False) -> str | None:
     socket = QLocalSocket()
-    socket.connectToServer("NexusMindAgent")
-    if not socket.waitForConnected(250):
-        return False
-    socket.write(b"show")
+    socket.connectToServer(INSTANCE_SERVER)
+    if not socket.waitForConnected(350):
+        return None
+    socket.write(command.encode("utf-8"))
     socket.flush()
-    socket.waitForBytesWritten(250)
+    socket.waitForBytesWritten(350)
+    reply = ""
+    if wait_for_reply and socket.waitForReadyRead(500):
+        reply = bytes(socket.readAll()).decode("utf-8", errors="ignore").strip()
     socket.disconnectFromServer()
+    return reply
+
+
+def _probe_existing_instance() -> str | None:
+    """Return running Agent version, empty string for legacy Agent, or None."""
+    return _send_instance_command("version", wait_for_reply=True)
+
+
+def _terminate_legacy_agent_processes() -> bool:
+    """Terminate packaged NexusMind Agent processes from an older IPC protocol."""
+    current_pid = os.getpid()
+    candidates: list[psutil.Process] = []
+    for process in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+        try:
+            if process.pid == current_pid:
+                continue
+            name = (process.info.get("name") or "").lower()
+            exe = (process.info.get("exe") or "").lower()
+            cmdline = " ".join(process.info.get("cmdline") or []).lower()
+            packaged_agent = (
+                "nexusmindagent" in name
+                or "nexusmindagent" in Path(exe).name.lower()
+                or "nexusmindagent.app/contents/macos/nexusmindagent" in exe
+            )
+            api_child = "--api-service" in cmdline and "nexusmindagent" in cmdline
+            if packaged_agent or api_child:
+                candidates.append(process)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    if not candidates:
+        return False
+
+    for process in candidates:
+        try:
+            process.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    _, alive = psutil.wait_procs(candidates, timeout=3)
+    for process in alive:
+        try:
+            process.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    psutil.wait_procs(alive, timeout=2)
     return True
 
 
@@ -1431,17 +1564,31 @@ def run_agent_gui(minimized: bool = False) -> int:
             pass
 
     app = QApplication(sys.argv)
+    # Use one Qt widget style on Windows, macOS, and Linux so native theme
+    # differences do not change control geometry or interaction states.
+    app.setStyle("Fusion")
     icon_path = app_icon_path()
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setQuitOnLastWindowClosed(False)
 
-    if _notify_existing_instance():
+    existing_version = _probe_existing_instance()
+    if existing_version == __version__:
+        _send_instance_command("show")
         return 0
+    if existing_version is not None:
+        if existing_version:
+            _send_instance_command("quit")
+            deadline = time.time() + 3
+            while time.time() < deadline and _probe_existing_instance() is not None:
+                time.sleep(0.1)
+        else:
+            _terminate_legacy_agent_processes()
+            time.sleep(0.3)
 
-    QLocalServer.removeServer("NexusMindAgent")
+    QLocalServer.removeServer(INSTANCE_SERVER)
     server = QLocalServer()
-    if not server.listen("NexusMindAgent"):
+    if not server.listen(INSTANCE_SERVER):
         QMessageBox.critical(
             None,
             "NexusMind Agent",
@@ -1456,10 +1603,18 @@ def run_agent_gui(minimized: bool = False) -> int:
         socket = server.nextPendingConnection()
         if socket is None:
             return
-        if socket.waitForReadyRead(250):
-            command = bytes(socket.readAll()).decode("utf-8", errors="ignore")
-            if command.strip() == "show":
+        if socket.waitForReadyRead(350):
+            command = bytes(socket.readAll()).decode("utf-8", errors="ignore").strip()
+            if command == "show":
                 window._show_window()
+            elif command == "version":
+                socket.write(__version__.encode("utf-8"))
+                socket.flush()
+                socket.waitForBytesWritten(350)
+            elif command == "quit":
+                socket.disconnectFromServer()
+                window._quit()
+                return
         socket.disconnectFromServer()
 
     server.newConnection.connect(handle_connection)

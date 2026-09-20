@@ -49,6 +49,80 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ runner.os == 'macOS' && '12.0' || '' }}
         run: python packaging/build_agent.py
 
+      - name: Verify packaged runtime on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:NEXUSMIND_HOST = "127.0.0.1"
+          $env:NEXUSMIND_PORT = "18301"
+          $expected = python -c "import nexusmind; print(nexusmind.__version__)"
+          $process = Start-Process -FilePath "dist\NexusMindAgent.exe" -ArgumentList "--api-service" -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:18301/health" -TimeoutSec 2
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) { throw "Packaged API did not start" }
+            if ($health.version -ne $expected) {
+              throw "Packaged version mismatch: expected $expected, got $($health.version)"
+            }
+            $appJs = (Invoke-WebRequest "http://127.0.0.1:18301/app.js" -UseBasicParsing).Content
+            if ($appJs -notmatch "webTab" -or $appJs -notmatch "submitWebIngest") {
+              throw "Packaged Web UI is missing current online-ingest features"
+            }
+            $uiJs = Invoke-WebRequest "http://127.0.0.1:18301/ui.js" -UseBasicParsing
+            if ($uiJs.StatusCode -ne 200) { throw "Packaged ui.js is unavailable" }
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Verify packaged runtime on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NEXUSMIND_HOST=127.0.0.1
+          export NEXUSMIND_PORT=18301
+          expected="$(python -c 'import nexusmind; print(nexusmind.__version__)')"
+          ./dist/NexusMindAgent --api-service > /tmp/nexusmind-agent.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18301/health > /tmp/nexusmind-health.json && break
+            sleep 0.5
+          done
+          python -c 'import json,sys; d=json.load(open("/tmp/nexusmind-health.json")); expected=sys.argv[1]; assert d["version"] == expected, (d["version"], expected)' "$expected"
+          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'webTab'
+          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'submitWebIngest'
+          curl -fsS http://127.0.0.1:18301/ui.js > /dev/null
+
+      - name: Verify packaged runtime on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NEXUSMIND_HOST=127.0.0.1
+          export NEXUSMIND_PORT=18301
+          expected="$(python -c 'import nexusmind; print(nexusmind.__version__)')"
+          ./dist/NexusMindAgent.app/Contents/MacOS/NexusMindAgent --api-service > /tmp/nexusmind-agent.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18301/health > /tmp/nexusmind-health.json && break
+            sleep 0.5
+          done
+          python -c 'import json,sys; d=json.load(open("/tmp/nexusmind-health.json")); expected=sys.argv[1]; assert d["version"] == expected, (d["version"], expected)' "$expected"
+          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'webTab'
+          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'submitWebIngest'
+          curl -fsS http://127.0.0.1:18301/ui.js > /dev/null
+
       - name: Prepare Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
