@@ -158,6 +158,7 @@ jobs:
       - name: Download Agent artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: agent-*
           path: release-input
 
       - name: Collect flat release assets
