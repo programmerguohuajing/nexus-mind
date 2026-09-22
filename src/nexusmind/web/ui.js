@@ -10,7 +10,7 @@
       "nav.compile": "编译队列",
       "nav.governance": "知识治理",
       "nav.workflow": "工作流",
-      "nav.review": "周复盘",
+      "nav.review": "复盘",
       "nav.notifications": "推送渠道",
       "notifications.title": "推送渠道管理",
       "notifications.subtitle": "配置飞书、钉钉、邮件及通用 Webhook 通知渠道",

@@ -5,7 +5,6 @@ import sys
 import time
 import webbrowser
 
-import psutil
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, Signal, QSettings, QThread

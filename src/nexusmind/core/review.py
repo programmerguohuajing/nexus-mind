@@ -865,44 +865,33 @@ def _attention_items(data: Dict[str, Any], broken_count: int, orphan_count: int)
 
 def _bullet_lines(values: List[str], empty_text: str) -> str:
     return "\n".join(f"- {v}" for v in values) if values else f"- {empty_text}"
-def generate_weekly_review(
-    week_str: Optional[str] = None,
+def generate_review(
+    period_type: str = "week",
+    period_value: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     vault_root: Path = VAULT_ROOT,
     author_scope: str = "current_user",
     push_channels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """从真实周数据生成结构化复盘；不调用模型，不补写日志中不存在的事实。"""
-    if not week_str:
-        now = datetime.now().isocalendar()
-        week_str = f"{now.year}-W{now.week:02d}"
-    _parse_week(week_str)
+    """从真实日志与 Git 跨数据源生成多维度结构化复盘报告。"""
     if author_scope not in {"current_user", "all_users"}:
         raise ValueError("author_scope must be current_user or all_users")
 
-    data = _week_data(week_str, vault_root, author_scope=author_scope)
-    previous_week = _previous_week(week_str)
-    previous = _week_data(previous_week, vault_root, author_scope=author_scope)
-    compile_stats = _compilation_stats(week_str, vault_root)
+    resolved = resolve_review_period(
+        period_type=period_type,
+        period_value=period_value,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    data = _period_data(resolved["start_date"], resolved["end_date"], vault_root, author_scope=author_scope)
+    previous = _period_data(resolved["prev_start_date"], resolved["prev_end_date"], vault_root, author_scope=author_scope)
+    compile_stats = _compilation_stats_range(resolved["start_date"], resolved["end_date"], vault_root)
     governance = {
         "broken": find_broken_links(vault_root=vault_root)["total_broken"],
         "orphans": find_orphans(vault_root=vault_root)["total_orphans"],
     }
-    project_files = list((vault_root / "20-Projects").rglob("*.md")) if (vault_root / "20-Projects").exists() else []
-
-    task_lines = []
-    for item in data["tasks"]:
-        parts = [f"**{item['date']}**"]
-        if item["task"]:
-            parts.append(item["task"])
-        if item["project"]:
-            parts.append(f"项目：{item['project']}")
-        if item["hours"]:
-            parts.append(f"投入：{item['hours']}h")
-        if item["output"]:
-            parts.append(f"产出：{item['output']}")
-        if item["link"]:
-            parts.append(f"关联：{item['link']}")
-        task_lines.append("- " + " · ".join(parts))
 
     comparison = "\n".join(_comparison(data, previous))
     attention = _bullet_lines(
@@ -911,34 +900,36 @@ def generate_weekly_review(
     )
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     avg_focus = f"{data['avg_focus']:.1f}/10" if data["avg_focus"] is not None else "无数据"
-    projects = "、".join(data["projects"]) if data["projects"] else "未从结构化任务中识别"
     daily_context = _bullet_lines(
         _synthesize_daily_context(data),
-        "本周暂无结构化人工日志。",
+        "该时间范围内暂无结构化人工日志。",
     )
 
     git_summary = _group_commit_highlights(data)
     active_git_repositories = sorted(git_summary["by_repo"].keys())
     executive_summary = _executive_summary(data, compile_stats)
     workstreams = _synthesize_git_workstreams(data)
-    workstream_text = "\n".join(workstreams["lines"]) or "- 本周没有足够 Git 数据形成明确工作主线。"
+    workstream_text = "\n".join(workstreams["lines"]) or "- 该时间范围内没有足够 Git 数据形成明确工作主线。"
     outcome_text = _bullet_lines(
         _synthesize_outcomes(data, compile_stats),
-        "本周没有足够数据提炼关键成果。",
+        "该时间范围内没有足够数据提炼关键成果。",
     )
-    release_highlights = "\n".join(git_summary["release_lines"]) or "- 本周没有采集到版本发布 / Tag。"
+    release_highlights = "\n".join(git_summary["release_lines"]) or "- 该时间范围内没有采集到版本发布 / Tag。"
     knowledge_highlights = _knowledge_highlights(compile_stats)
     next_focus = _bullet_lines(
         _next_week_focus(data, governance),
-        "暂无明确的下周关注项。",
+        "暂无明确的后续重点。",
     )
     status_icon = "✅" if not data["pending"] and not data["git_dirty_repositories"] else "🟡"
-
     scope_label = "当前仓库用户" if author_scope == "current_user" else "所有用户"
+
     content = f"""---
-title: "{week_str} 工作周报"
+title: "{resolved['period_label']}"
 generated_at: "{timestamp}"
-week: "{week_str}"
+period_type: "{resolved['period_type']}"
+period_value: "{resolved['period_value']}"
+start_date: "{resolved['start_date'].isoformat()}"
+end_date: "{resolved['end_date'].isoformat()}"
 author_scope: "{author_scope}"
 total_hours: {data['total_hours']:.1f}
 avg_focus: "{avg_focus}"
@@ -952,20 +943,20 @@ broken_links: {governance['broken']}
 orphans: {governance['orphans']}
 tags:
   - "#review"
-  - "#weekly-review"
+  - "#{resolved['period_type']}-review"
   - "#work-report"
 ---
 
-# {week_str} 工作周报
+# {resolved['period_label']}
 
 > **Git 统计口径：{scope_label}**
 >
-> **本周摘要**
+> **本阶段摘要**
 > {executive_summary}
 
-## 📊 一周速览
+## 📊 阶段速览
 
-| 指标 | 本周 |
+| 指标 | 当前周期 |
 | --- | ---: |
 | 日志覆盖 | {len(data['daily_files'])} 天 |
 | Git Commit | {data['git_commits']} 个 |
@@ -976,9 +967,9 @@ tags:
 | 总投入 | {data['total_hours']:.1f}h |
 | 平均专注度 | {avg_focus} |
 | 完成 / 待办 | {len(data['completed'])} / {len(data['pending'])} |
-| 本周状态 | {status_icon} |
+| 阶段状态 | {status_icon} |
 
-## 🎯 本周工作主线
+## 🎯 工作主线
 
 {workstream_text}
 
@@ -1009,9 +1000,9 @@ tags:
 
 ### 未完成 / 顺延
 
-{_bullet_lines(data['pending'], "本周日志中没有结构化未完成项。")}
+{_bullet_lines(data['pending'], "日志中没有结构化未完成项。")}
 
-## 📈 与上周对比
+## 📈 与上一周期对比
 
 {comparison}
 
@@ -1019,7 +1010,7 @@ tags:
 
 {attention}
 
-## 🧭 下周重点
+## 🧭 后续重点
 
 {next_focus}
 
@@ -1031,13 +1022,14 @@ tags:
 
 ## 数据口径
 
-- Git 自动采集保存所有用户的提交记录；本周报 Git 统计口径为：**{scope_label}**。
-- 原始 Git Commit 仅作为内部证据源参与聚合，不在周报正文逐条展示。
+- Git 自动采集保存所有用户的提交记录；本复盘报告 Git 统计口径为：**{scope_label}**。
+- 原始 Git Commit 仅作为内部证据源参与聚合，不在报告正文逐条展示。
 - 工作主线会按仓库、scope、工程类别、Release/Tag 与人工日志进行去重和聚合，再形成成果级摘要。
 - Daily Log、知识编译审计和知识库治理状态会与 Git 数据交叉整合，避免把提交数量等同于工作价值。
-- 周报只陈述可验证事实；不会根据提交信息推断收入、业务效果或未记录的主观结论。
+- 报告只陈述可验证事实；不会根据提交信息推断收入、业务效果或未记录的主观结论。
 """
-    review_path = f"90-AI-Workspace/reviews/{week_str}-Weekly-Review.md"
+
+    review_path = resolved["path"]
     review_file = vault_root / review_path
     old_version = None
     if review_file.exists():
@@ -1053,18 +1045,20 @@ tags:
     )
     notification_result = None
     if push_channels:
-        title = f"{week_str} 工作周报复盘"
+        title = f"{resolved['period_label']}"
         notification_result = send_notification(
             title=title,
-            content=f"【NexusMind {week_str} 周复盘报告】\n- 总投入工时: {data['total_hours']:.1f}h\n- Git Commit: {data['git_commits']} 个\n- 完成/待办: {len(data['completed'])} / {len(data['pending'])}\n- 编译知识: {compile_stats['total']} 条\n\n查看完整复盘报告:\n{review_path}",
+            content=f"【NexusMind {resolved['period_label']}】\n- 总投入工时: {data['total_hours']:.1f}h\n- Git Commit: {data['git_commits']} 个\n- 完成/待办: {len(data['completed'])} / {len(data['pending'])}\n- 编译知识: {compile_stats['total']} 条\n\n查看完整复盘报告:\n{review_path}",
             channel_ids=push_channels,
-            event_type="weekly_review",
-            metadata={"week": week_str, "path": review_path},
+            event_type="review",
+            metadata={"period_type": resolved["period_type"], "period_value": resolved["period_value"], "path": review_path},
         )
 
     return {
         "status": "review_generated",
-        "week": week_str,
+        "period_type": resolved["period_type"],
+        "period_value": resolved["period_value"],
+        "week": resolved["period_value"] if resolved["period_type"] == "week" else None,
         "author_scope": author_scope,
         "author_scope_label": scope_label,
         "path": review_path,
@@ -1085,3 +1079,19 @@ tags:
         "version": res["version"],
         "notification_result": notification_result,
     }
+
+
+def generate_weekly_review(
+    week_str: Optional[str] = None,
+    vault_root: Path = VAULT_ROOT,
+    author_scope: str = "current_user",
+    push_channels: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """从真实周数据生成结构化复盘（兼容旧接口）。"""
+    return generate_review(
+        period_type="week",
+        period_value=week_str,
+        vault_root=vault_root,
+        author_scope=author_scope,
+        push_channels=push_channels,
+    )

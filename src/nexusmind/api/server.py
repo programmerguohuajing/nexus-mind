@@ -37,7 +37,7 @@ from nexusmind.core.notification import (
 )
 from nexusmind.core.web_ingest import fetch_web_page
 from nexusmind.core.occ import get_file_hash
-from nexusmind.core.review import generate_weekly_review
+from nexusmind.core.review import generate_review, generate_weekly_review
 from nexusmind.core.search import search_notes
 from nexusmind.core.uploads import SUPPORTED_EXTENSIONS, ingest_uploaded_file
 from nexusmind.core.storage import (
@@ -104,6 +104,10 @@ class WebIngestRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
+    period_type: Optional[str] = "week"
+    period_value: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     week: Optional[str] = None
     author_scope: str = "current_user"
     push_channels: Optional[List[str]] = None
@@ -690,11 +694,17 @@ def vault_ingest_endpoint(req: IngestRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/mcp/vault_review")
 @app.post("/mcp/vault_weekly_review")
-def vault_weekly_review_endpoint(req: ReviewRequest):
+def vault_review_endpoint(req: ReviewRequest):
     try:
-        return generate_weekly_review(
-            week_str=req.week,
+        p_type = req.period_type or "week"
+        p_val = req.period_value or req.week
+        return generate_review(
+            period_type=p_type,
+            period_value=p_val,
+            start_date=req.start_date,
+            end_date=req.end_date,
             author_scope=req.author_scope,
             push_channels=req.push_channels,
         )

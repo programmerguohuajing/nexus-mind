@@ -36,6 +36,8 @@ def main() -> int:
         str(icon),
         "--hidden-import",
         "nexusmind.api.server",
+        "--hidden-import",
+        "nexusmind.core.notification",
         "--add-data",
         f"{assets}{__import__('os').pathsep}nexusmind/agent/assets",
         "--add-data",

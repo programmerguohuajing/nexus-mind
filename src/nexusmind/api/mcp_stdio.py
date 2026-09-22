@@ -20,7 +20,7 @@ from nexusmind.core.notification import (
     send_notification,
 )
 from nexusmind.core.occ import get_file_hash
-from nexusmind.core.review import generate_weekly_review
+from nexusmind.core.review import generate_review, generate_weekly_review
 from nexusmind.core.search import search_notes
 from nexusmind.core.storage import (
     extract_frontmatter,
@@ -249,9 +249,12 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             url=args.get("url"),
             folder=args.get("folder", "60-References/Articles"),
         )
-    if name == "vault_weekly_review":
-        return generate_weekly_review(
-            week_str=args.get("week"),
+    if name in ("vault_review", "vault_weekly_review"):
+        return generate_review(
+            period_type=args.get("period_type", "week"),
+            period_value=args.get("period_value") or args.get("week"),
+            start_date=args.get("start_date"),
+            end_date=args.get("end_date"),
             author_scope=args.get("author_scope", "current_user"),
             push_channels=args.get("push_channels"),
         )

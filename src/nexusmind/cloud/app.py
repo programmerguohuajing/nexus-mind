@@ -48,6 +48,10 @@ class WebIngestRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
+    period_type: str | None = "week"
+    period_value: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     week: str | None = None
     author_scope: str = "current_user"
 
@@ -612,6 +616,7 @@ def _cloud_review_synthesis(commits: list[dict[str, Any]], tags: list[dict[str, 
     return {"lines": lines, "outcomes": outcomes, "categories": categories}
 
 
+@app.post("/mcp/vault_review")
 @app.post("/mcp/vault_weekly_review")
 async def weekly_review(req: ReviewRequest, request: Request):
     env = _env(request)
