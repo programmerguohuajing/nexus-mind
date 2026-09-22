@@ -1240,7 +1240,82 @@ async function syncWorkflow() {
   }
 }
 
+function getIsoWeekString(d = new Date()) {
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = target.valueOf();
+  target.setMonth(0, 1);
+  if (target.getDay() !== 4) {
+    target.setMonth(0, 1 + ((4 - target.getDay() + 7) % 7));
+  }
+  const weekNumber = 1 + Math.round((firstThursday - target.valueOf()) / 604800000);
+  const year = target.getFullYear();
+  return year + "-W" + String(weekNumber).padStart(2, "0");
+}
+
+function getIsoDateString(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return y + "-" + m + "-" + day;
+}
+
+function getIsoMonthString(d = new Date()) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+
+function getIsoQuarterString(d = new Date()) {
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return d.getFullYear() + "-Q" + q;
+}
+
+function getIsoYearString(d = new Date()) {
+  return String(d.getFullYear());
+}
+
+function renderPeriodInputsHTML(type) {
+  const curWeek = getIsoWeekString();
+  const curDate = getIsoDateString();
+  const curMonth = getIsoMonthString();
+  const curQuarter = getIsoQuarterString();
+  const curYear = getIsoYearString();
+
+  if (type === "day") {
+    return '<div class="form-group"><label>' + t("review.periodValue") + '</label><input id="reviewPeriodValue" type="date" class="input" value="' + curDate + '" placeholder="' + curDate + '" /></div>';
+  }
+  if (type === "month") {
+    return '<div class="form-group"><label>' + t("review.periodValue") + '</label><input id="reviewPeriodValue" type="month" class="input" value="' + curMonth + '" placeholder="' + curMonth + '" /></div>';
+  }
+  if (type === "quarter") {
+    return '<div class="form-group"><label>' + t("review.periodValue") + '</label><input id="reviewPeriodValue" class="input" value="' + (state.reviewPeriodValue || curQuarter) + '" placeholder="' + curQuarter + '" /></div>';
+  }
+  if (type === "year") {
+    return '<div class="form-group"><label>' + t("review.periodValue") + '</label><input id="reviewPeriodValue" class="input" value="' + (state.reviewPeriodValue || curYear) + '" placeholder="' + curYear + '" /></div>';
+  }
+  if (type === "custom") {
+    const defaultStart = getIsoDateString(new Date(Date.now() - 7 * 86400000));
+    return '<div class="form-grid"><div class="form-group"><label>' + t("review.startDate") + '</label><input id="reviewStartDate" type="date" class="input" value="' + defaultStart + '" /></div>'
+      + '<div class="form-group"><label>' + t("review.endDate") + '</label><input id="reviewEndDate" type="date" class="input" value="' + curDate + '" /></div></div>';
+  }
+  return '<div class="form-group"><label>' + t("review.periodValue") + '</label><input id="reviewPeriodValue" class="input" value="' + (state.reviewPeriodValue || curWeek) + '" placeholder="' + curWeek + '" /></div>';
+}
+
 function reviewTemplate() {
+  const periodType = state.reviewPeriodType || "week";
+  const typePickerHtml = window.NexusUI?.renderPickerHTML({
+    id: "reviewPeriodTypePicker",
+    value: periodType,
+    options: [
+      { value: "week", label: t("review.periodWeek"), i18n: "review.periodWeek" },
+      { value: "day", label: t("review.periodDay"), i18n: "review.periodDay" },
+      { value: "month", label: t("review.periodMonth"), i18n: "review.periodMonth" },
+      { value: "quarter", label: t("review.periodQuarter"), i18n: "review.periodQuarter" },
+      { value: "year", label: t("review.periodYear"), i18n: "review.periodYear" },
+      { value: "custom", label: t("review.periodCustom"), i18n: "review.periodCustom" }
+    ]
+  }) || "";
+
   const scopePickerHtml = window.NexusUI?.renderPickerHTML({
     id: "reviewAuthorScopePicker",
     value: state.reviewAuthorScope || "current_user",
@@ -1249,10 +1324,13 @@ function reviewTemplate() {
       { value: "all_users", label: t("review.allUsers"), i18n: "review.allUsers" }
     ]
   }) || "";
+
   setTimeout(loadPushChannelCheckboxes, 50);
+
   return '<div class="grid two"><div class="card"><h3>' + t("review.generate") + '</h3>'
     + '<p class="muted">' + t("review.description") + '</p>'
-    + '<div class="form-group"><label>' + t("review.isoWeek") + '</label><input id="reviewWeek" class="input" placeholder="2026-W38" /></div>'
+    + '<div class="form-group"><label>' + t("review.periodType") + '</label>' + typePickerHtml + '</div>'
+    + '<div id="reviewPeriodInputContainer">' + renderPeriodInputsHTML(periodType) + '</div>'
     + '<div class="form-group"><label>' + t("review.scope") + '</label>' + scopePickerHtml + '</div>'
     + '<div class="form-group"><label>📢 推送通知渠道 (可选)</label><div id="reviewPushChannels" class="channel-checkbox-group"><span class="muted">正在读取渠道…</span></div></div>'
     + '<div class="actions" style="margin-top:14px"><button class="btn" onclick="runReview()">' + t("review.generate") + '</button></div></div>'
@@ -1285,14 +1363,29 @@ function getSelectedPushChannels(containerId = "reviewPushChannels") {
 }
 
 async function runReview() {
-  const week = document.getElementById("reviewWeek").value.trim() || null;
+  const periodType = state.reviewPeriodType || "week";
   const authorScope = window.NexusUI?.getPickerValue("reviewAuthorScopePicker", state.reviewAuthorScope || "current_user") || "current_user";
   const pushChannels = getSelectedPushChannels("reviewPushChannels");
   const resultEl = document.getElementById("reviewResult");
+
+  let payload = {
+    period_type: periodType,
+    author_scope: authorScope,
+    push_channels: pushChannels
+  };
+
+  if (periodType === "custom") {
+    payload.start_date = document.getElementById("reviewStartDate")?.value.trim() || null;
+    payload.end_date = document.getElementById("reviewEndDate")?.value.trim() || null;
+  } else {
+    const valInput = document.getElementById("reviewPeriodValue");
+    payload.period_value = valInput?.value.trim() || null;
+  }
+
   try {
-    const result = await api("/mcp/vault_weekly_review", {
+    const result = await api("/mcp/vault_review", {
       method: "POST",
-      body: JSON.stringify({ week: week, author_scope: authorScope, push_channels: pushChannels })
+      body: JSON.stringify(payload)
     });
     const note = await api("/mcp/vault_read", { method: "POST", body: JSON.stringify({ path: result.path }) });
     let pushBadge = "";
@@ -1301,7 +1394,7 @@ async function runReview() {
       pushBadge = '<span class="badge ' + (status === "success" ? "ok" : "warn") + '">推送: ' + esc(status) + ' (' + result.notification_result.sent_count + ')</span>';
     }
     resultEl.className = "review-report";
-    resultEl.innerHTML = '<div class="result-head"><div><strong>' + esc(t("review.weekly", { week: result.week })) + '</strong>'
+    resultEl.innerHTML = '<div class="result-head"><div><strong>' + esc(result.period_value ? result.period_value + " 复盘报告" : "复盘报告") + '</strong>'
       + '<div class="path">' + esc(result.path) + '</div></div><div class="actions">'
       + '<span class="badge ok">' + result.git_commits + ' commits</span>'
       + '<span class="badge">' + esc(authorScope === "all_users" ? t("review.allUsers") : t("review.currentUser")) + '</span>'
@@ -1502,6 +1595,11 @@ async function renderCurrent() {
   if (state.view === "workflow") return renderWorkflow();
   if (state.view === "review") {
     app.innerHTML = reviewTemplate();
+    window.NexusUI?.setupPicker("reviewPeriodTypePicker", function(val) {
+      state.reviewPeriodType = val;
+      const container = document.getElementById("reviewPeriodInputContainer");
+      if (container) container.innerHTML = renderPeriodInputsHTML(val);
+    });
     window.NexusUI?.setupPicker("reviewAuthorScopePicker", function(val) {
       state.reviewAuthorScope = val;
     });

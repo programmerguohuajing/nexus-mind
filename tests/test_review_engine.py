@@ -225,3 +225,72 @@ def test_review_can_include_all_users_from_collected_git_log(tmp_path):
     assert "`aaaaaaa`" not in review
     assert "`ccccccc`" not in review
     assert "原始 Git Commit 仅作为内部证据源参与聚合" in review
+
+
+def test_resolve_review_period_granularity():
+    from datetime import date
+    from nexusmind.core.review import resolve_review_period
+
+    # Day
+    day_res = resolve_review_period(period_type="day", period_value="2026-09-17")
+    assert day_res["period_type"] == "day"
+    assert day_res["period_value"] == "2026-09-17"
+    assert day_res["start_date"] == date(2026, 9, 17)
+    assert day_res["end_date"] == date(2026, 9, 17)
+    assert day_res["path"] == "90-AI-Workspace/reviews/2026-09-17-Daily-Review.md"
+
+    # Month
+    month_res = resolve_review_period(period_type="month", period_value="2026-09")
+    assert month_res["period_type"] == "month"
+    assert month_res["start_date"] == date(2026, 9, 1)
+    assert month_res["end_date"] == date(2026, 9, 30)
+    assert month_res["path"] == "90-AI-Workspace/reviews/2026-09-Monthly-Review.md"
+
+    # Quarter
+    q_res = resolve_review_period(period_type="quarter", period_value="2026-Q3")
+    assert q_res["period_type"] == "quarter"
+    assert q_res["start_date"] == date(2026, 7, 1)
+    assert q_res["end_date"] == date(2026, 9, 30)
+    assert q_res["path"] == "90-AI-Workspace/reviews/2026-Q3-Quarterly-Review.md"
+
+    # Year
+    yr_res = resolve_review_period(period_type="year", period_value="2026")
+    assert yr_res["period_type"] == "year"
+    assert yr_res["start_date"] == date(2026, 1, 1)
+    assert yr_res["end_date"] == date(2026, 12, 31)
+    assert yr_res["path"] == "90-AI-Workspace/reviews/2026-Yearly-Review.md"
+
+    # Custom range with start_date / end_date
+    c_res = resolve_review_period(period_type="custom", start_date="2026-09-01", end_date="2026-09-15")
+    assert c_res["period_type"] == "custom"
+    assert c_res["start_date"] == date(2026, 9, 1)
+    assert c_res["end_date"] == date(2026, 9, 15)
+    assert c_res["path"] == "90-AI-Workspace/reviews/2026-09-01_2026-09-15-Custom-Review.md"
+
+
+def test_generate_review_multi_granularity(tmp_path):
+    from nexusmind.core.review import generate_review
+
+    _seed(tmp_path)
+    _write_daily(tmp_path, "2026-09-17", 2.0, 8, True)
+    _write_daily(tmp_path, "2026-09-18", 3.0, 9, True)
+
+    # Monthly review
+    m_result = generate_review(period_type="month", period_value="2026-09", vault_root=tmp_path)
+    assert m_result["status"] == "review_generated"
+    assert m_result["period_type"] == "month"
+    assert m_result["period_value"] == "2026-09"
+    assert m_result["daily_logs_count"] == 2
+    assert m_result["total_hours"] == 5.0
+    assert (tmp_path / m_result["path"]).exists()
+    text = (tmp_path / m_result["path"]).read_text(encoding="utf-8")
+    assert "2026-09 月度复盘报告" in text
+
+    # Daily review
+    d_result = generate_review(period_type="day", period_value="2026-09-17", vault_root=tmp_path)
+    assert d_result["status"] == "review_generated"
+    assert d_result["period_type"] == "day"
+    assert d_result["daily_logs_count"] == 1
+    assert d_result["total_hours"] == 2.0
+    assert (tmp_path / d_result["path"]).exists()
+
