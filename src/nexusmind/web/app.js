@@ -294,7 +294,7 @@ function searchTemplate() {
     ]
   }) || "";
   return '<div class="toolbar">'
-    + '<input id="searchQuery" class="input" placeholder="' + esc(t("search.placeholder")) + '" />'
+    + '<input id="searchQuery" class="input" placeholder="' + esc(t("search.placeholder")) + '" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />'
     + folderPickerHtml
     + '<button class="btn" onclick="runSearch()">' + t("search.action") + '</button></div>'
     + '<div class="split"><div class="card"><h3>' + t("search.results") + '</h3>'
