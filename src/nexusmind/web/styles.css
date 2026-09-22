@@ -706,11 +706,24 @@ pre {
   stroke-width: 1.2;
   opacity: .75;
 }
-.graph-node { cursor: pointer; }
+.graph-node {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.graph-node.dragging {
+  cursor: grabbing;
+}
 .graph-node circle {
   fill: #ffffff;
   stroke: #57606a;
   stroke-width: 1.5;
+  transition: fill .12s ease, stroke .12s ease, stroke-width .12s ease;
+}
+.graph-node.dragging circle {
+  fill: #dcecff;
+  stroke: #0877e4;
+  stroke-width: 2.4;
 }
 .graph-node:hover circle {
   fill: #eaf2ff;
@@ -718,9 +731,18 @@ pre {
   stroke-width: 2;
 }
 .graph-node text {
-  fill: #4b5563;
-  font-size: 10px;
+  fill: #374151;
+  font-size: 11px;
+  font-weight: 500;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 3px;
+  stroke-linejoin: round;
   pointer-events: none;
+}
+[data-theme="dark"] .graph-node text {
+  fill: #e5e7eb;
+  stroke: #1b2128;
 }
 .canvas-layout {
   display: grid;
@@ -1049,8 +1071,19 @@ pre, .md-code { background: var(--code-bg); color: var(--code-text); border-colo
 
 .ui-picker {
   position: relative;
+  width: auto;
+  min-width: 120px;
+}
+.top-actions .ui-picker {
   width: 122px;
   flex: 0 0 122px;
+}
+.toolbar .ui-picker {
+  min-width: 140px;
+  flex: 0 0 auto;
+}
+.form-group .ui-picker {
+  width: 100%;
 }
 
 .top-picker-button {
@@ -1125,7 +1158,9 @@ pre, .md-code { background: var(--code-bg); color: var(--code-text); border-colo
   top: calc(100% + 7px);
   left: 0;
   z-index: 80;
-  width: 100%;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(340px, 90vw);
   box-sizing: border-box;
   padding: 6px;
   display: none;

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from nexusmind.config import VAULT_ROOT
 from nexusmind.core.compiler import patch_note
 from nexusmind.core.indexer import find_broken_links, find_orphans
+from nexusmind.core.notification import send_notification
 from nexusmind.core.storage import extract_frontmatter
 
 
@@ -281,16 +282,146 @@ def _extract_git_activity(text: str, author_scope: str = "current_user") -> Dict
     }
 
 
-def _week_data(
-    week_str: str,
+def resolve_review_period(
+    period_type: str = "week",
+    period_value: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    today = date.today()
+    pt = (period_type or "week").lower()
+    if pt == "day":
+        val = period_value or today.isoformat()
+        start_d = date.fromisoformat(val)
+        end_d = start_d
+        prev_start_d = start_d - timedelta(days=1)
+        prev_end_d = prev_start_d
+        period_label = f"{val} 日复盘报告"
+        file_name = f"{val}-Daily-Review.md"
+    elif pt == "month":
+        val = period_value or today.strftime("%Y-%m")
+        match = re.fullmatch(r"(\d{4})-(\d{2})", val)
+        if not match:
+            raise ValueError("month must use format YYYY-MM")
+        year, month = int(match.group(1)), int(match.group(2))
+        start_d = date(year, month, 1)
+        if month == 12:
+            end_d = date(year, 12, 31)
+            prev_start_d = date(year, 11, 1)
+            prev_end_d = date(year, 11, 30)
+        else:
+            end_d = date(year, month + 1, 1) - timedelta(days=1)
+            if month == 1:
+                prev_start_d = date(year - 1, 12, 1)
+                prev_end_d = date(year - 1, 12, 31)
+            else:
+                prev_start_d = date(year, month - 1, 1)
+                prev_end_d = start_d - timedelta(days=1)
+        period_label = f"{val} 月度复盘报告"
+        file_name = f"{val}-Monthly-Review.md"
+    elif pt == "quarter":
+        if not period_value:
+            q = (today.month - 1) // 3 + 1
+            val = f"{today.year}-Q{q}"
+        else:
+            val = period_value.upper()
+        match = re.fullmatch(r"(\d{4})-Q([1-4])", val)
+        if not match:
+            raise ValueError("quarter must use format YYYY-Qn (e.g. 2026-Q3)")
+        year, q = int(match.group(1)), int(match.group(2))
+        start_m = (q - 1) * 3 + 1
+        end_m = q * 3
+        start_d = date(year, start_m, 1)
+        end_d = date(year, end_m + 1, 1) - timedelta(days=1) if end_m < 12 else date(year, 12, 31)
+        if q == 1:
+            prev_start_d = date(year - 1, 10, 1)
+            prev_end_d = date(year - 1, 12, 31)
+        else:
+            prev_q = q - 1
+            prev_sm = (prev_q - 1) * 3 + 1
+            prev_em = prev_q * 3
+            prev_start_d = date(year, prev_sm, 1)
+            prev_end_d = date(year, prev_em + 1, 1) - timedelta(days=1)
+        period_label = f"{val} 季度复盘报告"
+        file_name = f"{val}-Quarterly-Review.md"
+    elif pt == "year":
+        val = period_value or str(today.year)
+        match = re.fullmatch(r"\d{4}", val)
+        if not match:
+            raise ValueError("year must use format YYYY")
+        year = int(val)
+        start_d = date(year, 1, 1)
+        end_d = date(year, 12, 31)
+        prev_start_d = date(year - 1, 1, 1)
+        prev_end_d = date(year - 1, 12, 31)
+        period_label = f"{val} 年度复盘报告"
+        file_name = f"{val}-Yearly-Review.md"
+    elif pt == "custom":
+        if period_value and ".." in period_value:
+            s, e = period_value.split("..", 1)
+            start_d = date.fromisoformat(s.strip())
+            end_d = date.fromisoformat(e.strip())
+        elif start_date and end_date:
+            start_d = date.fromisoformat(start_date)
+            end_d = date.fromisoformat(end_date)
+        else:
+            start_d = today - timedelta(days=7)
+            end_d = today
+        if start_d > end_d:
+            start_d, end_d = end_d, start_d
+        duration = (end_d - start_d).days + 1
+        prev_end_d = start_d - timedelta(days=1)
+        prev_start_d = prev_end_d - timedelta(days=duration - 1)
+        val = f"{start_d}_{end_d}"
+        period_label = f"{start_d} 至 {end_d} 自定义复盘报告"
+        file_name = f"{start_d}_{end_d}-Custom-Review.md"
+    else:  # week
+        if not period_value:
+            iso = today.isocalendar()
+            val = f"{iso.year}-W{iso.week:02d}"
+        else:
+            val = period_value
+        year, week = _parse_week(val)
+        start_d = date.fromisocalendar(year, week, 1)
+        end_d = date.fromisocalendar(year, week, 7)
+        prev_str = _previous_week(val)
+        py, pw = _parse_week(prev_str)
+        prev_start_d = date.fromisocalendar(py, pw, 1)
+        prev_end_d = date.fromisocalendar(py, pw, 7)
+        period_label = f"{val} 工作周报"
+        file_name = f"{val}-Weekly-Review.md"
+
+    return {
+        "period_type": pt,
+        "period_value": val,
+        "start_date": start_d,
+        "end_date": end_d,
+        "prev_start_date": prev_start_d,
+        "prev_end_date": prev_end_d,
+        "period_label": period_label,
+        "file_name": file_name,
+        "path": f"90-AI-Workspace/reviews/{file_name}",
+    }
+
+
+def _belongs_to_date_range(stem: str, start_d: date, end_d: date) -> bool:
+    try:
+        day = date.fromisoformat(stem)
+    except ValueError:
+        return False
+    return start_d <= day <= end_d
+
+
+def _period_data(
+    start_d: date,
+    end_d: date,
     vault_root: Path,
     author_scope: str = "current_user",
 ) -> Dict[str, Any]:
-    year, week = _parse_week(week_str)
     daily_dir = vault_root / "30-Logs" / "Daily"
     daily_files = [
         p for p in daily_dir.glob("*.md")
-        if _belongs_to_week(p.stem, year, week)
+        if _belongs_to_date_range(p.stem, start_d, end_d)
     ] if daily_dir.exists() else []
 
     total_hours = 0.0
@@ -357,8 +488,18 @@ def _week_data(
     }
 
 
-def _compilation_stats(week_str: str, vault_root: Path) -> Dict[str, Any]:
+def _week_data(
+    week_str: str,
+    vault_root: Path,
+    author_scope: str = "current_user",
+) -> Dict[str, Any]:
     year, week = _parse_week(week_str)
+    start_d = date.fromisocalendar(year, week, 1)
+    end_d = date.fromisocalendar(year, week, 7)
+    return _period_data(start_d, end_d, vault_root, author_scope=author_scope)
+
+
+def _compilation_stats_range(start_d: date, end_d: date, vault_root: Path) -> Dict[str, Any]:
     log_file = vault_root / "00-Meta" / "COMPILATION-LOG.md"
     stats: Dict[str, Any] = {
         "total": 0,
@@ -369,17 +510,17 @@ def _compilation_stats(week_str: str, vault_root: Path) -> Dict[str, Any]:
     }
     if not log_file.exists():
         return stats
-    current_in_week = False
+    current_in_range = False
     targets: List[str] = []
     for line in log_file.read_text(encoding="utf-8").splitlines():
         match = re.match(r"## \[(\d{4}-\d{2}-\d{2}) ", line)
         if match:
-            d = date.fromisoformat(match.group(1)).isocalendar()
-            current_in_week = d.year == year and d.week == week
-            if current_in_week:
+            d = date.fromisoformat(match.group(1))
+            current_in_range = start_d <= d <= end_d
+            if current_in_range:
                 stats["total"] += 1
             continue
-        if not current_in_week:
+        if not current_in_range:
             continue
         if "操作类型" in line and "新建卡片" in line:
             stats["created"] += 1
@@ -399,6 +540,13 @@ def _compilation_stats(week_str: str, vault_root: Path) -> Dict[str, Any]:
         domains[domain] = domains.get(domain, 0) + 1
     stats["domains"] = domains
     return stats
+
+
+def _compilation_stats(week_str: str, vault_root: Path) -> Dict[str, Any]:
+    year, week = _parse_week(week_str)
+    start_d = date.fromisocalendar(year, week, 1)
+    end_d = date.fromisocalendar(year, week, 7)
+    return _compilation_stats_range(start_d, end_d, vault_root)
 
 def _group_commit_highlights(data: Dict[str, Any]) -> Dict[str, Any]:
     by_repo: Dict[str, List[Dict[str, str]]] = {}
@@ -721,6 +869,7 @@ def generate_weekly_review(
     week_str: Optional[str] = None,
     vault_root: Path = VAULT_ROOT,
     author_scope: str = "current_user",
+    push_channels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """从真实周数据生成结构化复盘；不调用模型，不补写日志中不存在的事实。"""
     if not week_str:
@@ -902,6 +1051,17 @@ tags:
         actor="reviewer",
         vault_root=vault_root,
     )
+    notification_result = None
+    if push_channels:
+        title = f"{week_str} 工作周报复盘"
+        notification_result = send_notification(
+            title=title,
+            content=f"【NexusMind {week_str} 周复盘报告】\n- 总投入工时: {data['total_hours']:.1f}h\n- Git Commit: {data['git_commits']} 个\n- 完成/待办: {len(data['completed'])} / {len(data['pending'])}\n- 编译知识: {compile_stats['total']} 条\n\n查看完整复盘报告:\n{review_path}",
+            channel_ids=push_channels,
+            event_type="weekly_review",
+            metadata={"week": week_str, "path": review_path},
+        )
+
     return {
         "status": "review_generated",
         "week": week_str,
@@ -923,4 +1083,5 @@ tags:
         "broken_links": governance["broken"],
         "orphans": governance["orphans"],
         "version": res["version"],
+        "notification_result": notification_result,
     }

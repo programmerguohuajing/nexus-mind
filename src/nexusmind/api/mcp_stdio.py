@@ -14,6 +14,11 @@ from nexusmind.core.compiler import (
 )
 from nexusmind.core.indexer import find_broken_links, find_orphans, rebuild_all_indices
 from nexusmind.core.ingest import ingest_article
+from nexusmind.core.notification import (
+    load_notification_config,
+    sanitize_channel_config,
+    send_notification,
+)
 from nexusmind.core.occ import get_file_hash
 from nexusmind.core.review import generate_weekly_review
 from nexusmind.core.search import search_notes
@@ -137,7 +142,7 @@ TOOLS_MANIFEST = [
     },
     {
         "name": "vault_weekly_review",
-        "description": "按 ISO 周生成结构化周复盘。",
+        "description": "按 ISO 周生成结构化周复盘，可选推送到通知渠道。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -147,7 +152,27 @@ TOOLS_MANIFEST = [
                     "enum": ["current_user", "all_users"],
                     "default": "current_user",
                 },
+                "push_channels": {"type": "array", "items": {"type": "string"}},
             },
+        },
+    },
+    {
+        "name": "vault_list_notification_channels",
+        "description": "获取已配置的推送通知渠道列表（飞书、钉钉、邮件、Webhook）。",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "vault_send_notification",
+        "description": "手动推送到指定的通知渠道。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "channels": {"type": "array", "items": {"type": "string"}},
+                "event_type": {"type": "string", "default": "general"},
+            },
+            "required": ["title", "content"],
         },
     },
 ]
@@ -195,6 +220,7 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             conflict_detected=args.get("conflict_detected", False),
             conflict_summary=args.get("conflict_summary"),
             if_match=args.get("ifMatch"),
+            push_channels=args.get("push_channels"),
         )
     if name == "vault_compile_pending":
         pending = scan_uncompiled_sources()
@@ -203,7 +229,7 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             "sources": [str(p.relative_to(VAULT_ROOT)).replace("\\", "/") for p in pending],
         }
     if name == "vault_incremental_compile":
-        return {"status": "success", "results": auto_compile_pending_sources()}
+        return {"status": "success", "results": auto_compile_pending_sources(push_channels=args.get("push_channels"))}
     if name == "vault_rebuild_indices":
         return rebuild_all_indices()
     if name == "vault_generate_canvas":
@@ -227,6 +253,20 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return generate_weekly_review(
             week_str=args.get("week"),
             author_scope=args.get("author_scope", "current_user"),
+            push_channels=args.get("push_channels"),
+        )
+    if name == "vault_list_notification_channels":
+        config = load_notification_config()
+        return {
+            "default_channel_id": config.get("default_channel_id"),
+            "channels": [sanitize_channel_config(c) for c in config.get("channels", [])],
+        }
+    if name == "vault_send_notification":
+        return send_notification(
+            title=args["title"],
+            content=args["content"],
+            channel_ids=args.get("channels"),
+            event_type=args.get("event_type", "general"),
         )
     raise ValueError(f"Unknown tool name: {name}")
 

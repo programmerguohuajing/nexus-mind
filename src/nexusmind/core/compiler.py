@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from nexusmind.config import VAULT_ROOT
+from nexusmind.core.notification import send_notification
 from nexusmind.core.occ import get_file_hash, verify_occ
 from nexusmind.core.permissions import check_write_permission
 from nexusmind.core.storage import extract_frontmatter, extract_links, resolve_vault_path
@@ -118,6 +119,7 @@ def compile_wiki_card(
     conflict_summary: Optional[str] = None,
     if_match: Optional[str] = None,
     vault_root: Path = VAULT_ROOT,
+    push_channels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """编译正式 Wiki 卡片，并强制来源声明、OCC 与审计日志。"""
     raw_sources = _validate_raw_sources(raw_sources, vault_root)
@@ -152,6 +154,19 @@ def compile_wiki_card(
         link_count=len(extract_links(compiled_content)),
         vault_root=vault_root,
     )
+
+    notification_result = None
+    if push_channels:
+        card_name = Path(target).stem
+        op_type = "新建知识卡片" if patch_res["created"] else "增量更新知识卡片"
+        notification_result = send_notification(
+            title=f"提炼知识: {card_name}",
+            content=f"【NexusMind LLM Wiki 知识编译】\n- 操作类型: {op_type}\n- 目标卡片: {target}\n- 原始素材: {', '.join(raw_sources)}\n- 版本: {patch_res['version']}",
+            channel_ids=push_channels,
+            event_type="knowledge_compiled",
+            metadata={"card_path": target, "sources": raw_sources},
+        )
+
     return {
         "status": "compiled_successfully",
         "card_path": target,
@@ -159,6 +174,7 @@ def compile_wiki_card(
         "created": patch_res["created"],
         "audit_logged": True,
         "sources": raw_sources,
+        "notification_result": notification_result,
     }
 
 
@@ -259,7 +275,10 @@ def _merge_existing_card(existing: str, rel_path: str, raw_content: str) -> str:
     return existing.rstrip() + block
 
 
-def auto_compile_pending_sources(vault_root: Path = VAULT_ROOT) -> List[Dict[str, Any]]:
+def auto_compile_pending_sources(
+    vault_root: Path = VAULT_ROOT,
+    push_channels: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """批量增量编译待处理 Raw，并在完成后重建分层索引。"""
     pending = scan_uncompiled_sources(vault_root=vault_root)
     results: List[Dict[str, Any]] = []
@@ -284,6 +303,7 @@ def auto_compile_pending_sources(vault_root: Path = VAULT_ROOT) -> List[Dict[str
             content,
             if_match=if_match,
             vault_root=vault_root,
+            push_channels=push_channels,
         )
         results.append(result)
 

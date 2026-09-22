@@ -12,6 +12,13 @@ from nexusmind.core.review import generate_weekly_review
 from nexusmind.core.search import search_notes
 from nexusmind.api.mcp_stdio import run_stdio_server
 
+from nexusmind.core.notification import (
+    load_notification_config,
+    sanitize_channel_config,
+    send_notification,
+    test_notification_channel,
+)
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nexusmind",
@@ -31,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser = subparsers.add_parser("compile", help="Incremental LLM Wiki compilation")
     compile_parser.add_argument("--all", action="store_true", help="Compile all pending reference files")
     compile_parser.add_argument("--pending", action="store_true", help="Preview pending raw references only")
+    compile_parser.add_argument("-p", "--push-channels", help="Comma separated list of notification channel IDs or types to push")
 
     search_parser = subparsers.add_parser("search", help="Search Vault notes")
     search_parser.add_argument("query", nargs="?", default="", help="Keyword or regex")
@@ -54,6 +62,21 @@ def build_parser() -> argparse.ArgumentParser:
     # Review command
     review_parser = subparsers.add_parser("review", help="Generate AI Weekly Review")
     review_parser.add_argument("--week", help="ISO Week format e.g. 2026-W38")
+    review_parser.add_argument("-p", "--push-channels", help="Comma separated list of notification channel IDs or types to push")
+
+    # Push command
+    push_parser = subparsers.add_parser("push", help="Push custom text or note to notification channels")
+    push_parser.add_argument("--title", required=True, help="Message title")
+    push_parser.add_argument("--content", help="Message content string")
+    push_parser.add_argument("--path", help="Relative path to note file to push")
+    push_parser.add_argument("-p", "--push-channels", help="Comma separated list of notification channel IDs or types")
+
+    # Notification command
+    noti_parser = subparsers.add_parser("notification", help="Manage notification channels")
+    noti_sub = noti_parser.add_subparsers(dest="noti_action", help="Notification action")
+    noti_sub.add_parser("list", help="List configured notification channels")
+    test_p = noti_sub.add_parser("test", help="Test notification channel")
+    test_p.add_argument("--id", required=True, help="Channel ID to test")
 
     # Check command
     check_parser = subparsers.add_parser("check", help="Run full system OCC and permission checks")
@@ -85,13 +108,14 @@ def main():
 
     elif args.command == "compile":
         pending = scan_uncompiled_sources()
+        channels = [c.strip() for c in args.push_channels.split(",")] if args.push_channels else None
         if args.pending or not args.all:
             print(f"待编译 Raw：{len(pending)}")
             for path in pending:
                 print("  -", path.relative_to(VAULT_ROOT).as_posix())
         else:
             print(f"🧠 Running LLM Wiki incremental compilation for vault={VAULT_ROOT}...")
-            results = auto_compile_pending_sources()
+            results = auto_compile_pending_sources(push_channels=channels)
             print(f"✅ Compilation finished. Processed {len(results)} pending references.")
             for item in results:
                 print(f"  - Card: {item['card_path']} (Version: {item['version']})")
@@ -141,8 +165,45 @@ def main():
 
     elif args.command == "review":
         print("📊 Running AI Weekly Review Pipeline...")
-        res = generate_weekly_review(week_str=args.week)
+        channels = [c.strip() for c in args.push_channels.split(",")] if args.push_channels else None
+        res = generate_weekly_review(week_str=args.week, push_channels=channels)
         print(f"✅ Weekly review generated at `{res['path']}` ({res['logged_tasks_count']} log items processed)")
+        if res.get("notification_result"):
+            print(f"📢 Notification status: {res['notification_result']['status']} (sent: {res['notification_result']['sent_count']})")
+
+    elif args.command == "push":
+        channels = [c.strip() for c in args.push_channels.split(",")] if args.push_channels else None
+        content = args.content or ""
+        if args.path:
+            file_p = VAULT_ROOT / args.path
+            if file_p.is_file():
+                content = file_p.read_text(encoding="utf-8")
+        res = send_notification(
+            title=args.title,
+            content=content,
+            channel_ids=channels,
+            event_type="manual_push",
+        )
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+
+    elif args.command == "notification":
+        action = getattr(args, "noti_action", None)
+        if action == "list":
+            config = load_notification_config()
+            print(f"Default channel: {config.get('default_channel_id')}")
+            for ch in config.get("channels", []):
+                s = sanitize_channel_config(ch)
+                print(f"- [{s.get('id')}] {s.get('name')} (Type: {s.get('type')}, Enabled: {s.get('enabled')})")
+        elif action == "test":
+            config = load_notification_config()
+            target = next((c for c in config.get("channels", []) if c.get("id") == args.id), None)
+            if not target:
+                print(f"❌ Channel '{args.id}' not found", file=sys.stderr)
+                sys.exit(1)
+            res = test_notification_channel(target)
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            print("Please specify notification subcommand (list/test)")
 
     elif args.command == "check":
         print("⚙️ Running NexusMind system checks...")

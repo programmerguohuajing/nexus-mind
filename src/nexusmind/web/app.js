@@ -14,7 +14,8 @@ const titleKeys = {
   compile: "nav.compile",
   governance: "nav.governance",
   workflow: "nav.workflow",
-  review: "nav.review"
+  review: "nav.review",
+  notifications: "nav.notifications"
 };
 
 const esc = (value = "") => String(value)
@@ -263,7 +264,8 @@ async function openWikiLink(target) {
   try {
     const data = await api("/api/resolve-link?target=" + encodeURIComponent(target));
     if (data.status === "ambiguous") {
-      toast(t("search.ambiguous", { count: data.matches.length }), true);
+      const count = (data.matches || data.results || []).length;
+      toast(t("search.ambiguous", { count: count }), true);
       return;
     }
     await navigateToNote(data.path);
@@ -280,12 +282,20 @@ async function navigateToNote(path) {
 }
 
 function searchTemplate() {
+  const folderPickerHtml = window.NexusUI?.renderPickerHTML({
+    id: "searchFolderPicker",
+    value: state.searchFolder || "40-Domain",
+    options: [
+      { value: "40-Domain", label: t("search.domain"), i18n: "search.domain" },
+      { value: "", label: t("search.all"), i18n: "search.all" },
+      { value: "20-Projects", label: t("search.projects"), i18n: "search.projects" },
+      { value: "30-Logs", label: t("search.logs"), i18n: "search.logs" },
+      { value: "60-References", label: t("search.raw"), i18n: "search.raw" }
+    ]
+  }) || "";
   return '<div class="toolbar">'
     + '<input id="searchQuery" class="input" placeholder="' + esc(t("search.placeholder")) + '" />'
-    + '<select id="searchFolder" class="select">'
-    + '<option value="40-Domain">' + t("search.domain") + '</option><option value="">' + t("search.all") + '</option>'
-    + '<option value="20-Projects">' + t("search.projects") + '</option><option value="30-Logs">' + t("search.logs") + '</option>'
-    + '<option value="60-References">' + t("search.raw") + '</option></select>'
+    + folderPickerHtml
     + '<button class="btn" onclick="runSearch()">' + t("search.action") + '</button></div>'
     + '<div class="split"><div class="card"><h3>' + t("search.results") + '</h3>'
     + '<div id="searchResults" class="list"><div class="empty">' + t("search.start") + '</div></div></div>'
@@ -295,7 +305,7 @@ function searchTemplate() {
 
 async function runSearch() {
   const query = document.getElementById("searchQuery").value.trim();
-  const folder = document.getElementById("searchFolder").value || null;
+  const folder = window.NexusUI?.getPickerValue("searchFolderPicker", state.searchFolder || "40-Domain") || null;
   const resultsEl = document.getElementById("searchResults");
   resultsEl.innerHTML = '<div class="empty">' + t("search.searching") + '</div>';
   try {
@@ -303,20 +313,22 @@ async function runSearch() {
       method: "POST",
       body: JSON.stringify({ query: query, folder: folder, limit: 50 })
     });
-    if (!data.matches.length) {
+    const matches = (data && (data.matches || data.results)) || [];
+    if (!matches.length) {
       resultsEl.innerHTML = '<div class="empty">' + t("search.empty") + '</div>';
       return;
     }
-    resultsEl.innerHTML = data.matches.map(function(item) {
+    resultsEl.innerHTML = matches.map(function(item) {
       const safePath = JSON.stringify(item.path).replaceAll('"', '&quot;');
       const tags = (item.tags || []).slice(0, 5).map(function(tag) {
         return '<span class="badge">' + esc(tag) + '</span>';
       }).join("");
+      const scoreBadge = item.score !== undefined ? '<span class="badge">' + esc(item.score) + '</span>' : '';
       return '<div class="result" data-path="' + esc(item.path) + '">'
-        + '<div class="result-head"><span class="result-title">' + esc(item.title) + '</span><span class="badge">' + item.score + '</span></div>'
+        + '<div class="result-head"><span class="result-title">' + esc(item.title) + '</span>' + scoreBadge + '</div>'
         + '<div class="path">' + esc(item.path) + '</div>'
         + '<div class="snippet">' + esc(item.snippet || "") + '</div>'
-        + '<div class="tags">' + tags + '</div></div>';
+        + (tags ? '<div class="tags">' + tags + '</div>' : '') + '</div>';
     }).join("");
     resultsEl.querySelectorAll(".result").forEach(function(el) {
       el.addEventListener("click", function() { openNote(el.dataset.path); });
@@ -647,22 +659,40 @@ async function rebuildIndices() {
 }
 
 async function renderGraph() {
+  const folderPickerHtml = window.NexusUI?.renderPickerHTML({
+    id: "graphFolderPicker",
+    value: state.graphFolder || "",
+    options: [
+      { value: "", label: t("search.all"), i18n: "search.all" },
+      { value: "40-Domain", label: t("search.domain"), i18n: "search.domain" },
+      { value: "20-Projects", label: t("search.projects"), i18n: "search.projects" },
+      { value: "30-Logs", label: t("search.logs"), i18n: "search.logs" }
+    ]
+  }) || "";
   app.innerHTML = '<div class="toolbar">'
-    + '<select id="graphFolder" class="select"><option value="">全库</option><option value="40-Domain">正式知识</option>'
-    + '<option value="20-Projects">项目</option><option value="30-Logs">日志</option></select>'
+    + folderPickerHtml
     + '<button class="btn" onclick="loadKnowledgeGraph()">刷新图谱</button></div>'
     + '<div class="graph-layout"><div class="card graph-card"><div class="section-title"><h2>知识关系图</h2><span id="graphStats" class="muted">加载中…</span></div>'
     + '<div id="knowledgeGraph" class="graph-stage"><div class="empty">正在构建关系图…</div></div></div>'
     + '<div class="card canvas-card"><div class="section-title"><h2>Canvas</h2><span id="canvasCount" class="muted">加载中…</span></div>'
     + '<div class="canvas-layout"><div id="canvasList" class="canvas-list"></div><div id="canvasViewer" class="canvas-stage"><div class="empty">选择 Canvas 查看</div></div></div></div></div>';
+  window.NexusUI?.setupPicker("graphFolderPicker", function(val) {
+    state.graphFolder = val;
+    loadKnowledgeGraph();
+  });
   await Promise.all([loadKnowledgeGraph(), loadCanvases()]);
 }
 
-function graphPositions(nodes, width, height) {
-  const sorted = nodes.slice().sort(function(a, b) { return (b.degree || 0) - (a.degree || 0); });
+function graphPositions(nodes, edges, width, height) {
+  if (!nodes || !nodes.length) return {};
+  const n = nodes.length;
   const centerX = width / 2, centerY = height / 2;
-  const maxRadius = Math.min(width, height) * 0.42;
+  const sorted = nodes.slice().sort(function(a, b) { return (b.degree || 0) - (a.degree || 0); });
   const positions = {};
+  const scaleX = (width - 200) / 2;
+  const scaleY = (height - 160) / 2;
+  const maxRings = Math.max(1, Math.ceil(Math.sqrt(n)));
+
   sorted.forEach(function(node, index) {
     if (index === 0) {
       positions[node.id] = { x: centerX, y: centerY };
@@ -670,16 +700,173 @@ function graphPositions(nodes, width, height) {
     }
     const ring = Math.floor(Math.sqrt(index));
     const ringStart = ring * ring;
-    const ringSize = Math.max(6, ring * 6);
+    const ringSize = Math.max(5, ring * 5);
     const pos = index - ringStart;
-    const angle = (Math.PI * 2 * pos / ringSize) - Math.PI / 2;
-    const radius = Math.min(maxRadius, 90 + ring * 68);
+    const angle = (Math.PI * 2 * pos / ringSize) - Math.PI / 2 + (ring * 0.4);
+    const rFraction = Math.min(1.0, ring / maxRings);
+    const radiusNorm = 0.28 + rFraction * 0.68;
     positions[node.id] = {
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius
+      x: centerX + Math.cos(angle) * scaleX * radiusNorm,
+      y: centerY + Math.sin(angle) * scaleY * radiusNorm
     };
   });
+
+  const minDist = Math.max(80, Math.min(150, 1800 / Math.sqrt(n)));
+  const iterations = 70;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    const temp = 1.0 - (iter / iterations);
+    const fx = {}, fy = {};
+    nodes.forEach(function(n) { fx[n.id] = 0; fy[n.id] = 0; });
+
+    for (let i = 0; i < n; i++) {
+      const idA = nodes[i].id;
+      const posA = positions[idA];
+      for (let j = i + 1; j < n; j++) {
+        const idB = nodes[j].id;
+        const posB = positions[idB];
+        let dx = posB.x - posA.x;
+        let dy = posB.y - posA.y;
+        let dist = Math.hypot(dx, dy) || 1;
+        if (dist < minDist * 2) {
+          const force = ((minDist * minDist) / (dist * dist)) * 1.8 * temp;
+          const nx = (dx / dist) * force;
+          const ny = (dy / dist) * force;
+          fx[idA] -= nx; fy[idA] -= ny;
+          fx[idB] += nx; fy[idB] += ny;
+        }
+      }
+    }
+
+    (edges || []).forEach(function(e) {
+      const posA = positions[e.source];
+      const posB = positions[e.target];
+      if (!posA || !posB) return;
+      let dx = posB.x - posA.x;
+      let dy = posB.y - posA.y;
+      let dist = Math.hypot(dx, dy) || 1;
+      if (dist > minDist) {
+        const force = (dist - minDist) * 0.06 * temp;
+        const nx = (dx / dist) * force;
+        const ny = (dy / dist) * force;
+        fx[e.source] += nx; fy[e.source] += ny;
+        fx[e.target] -= nx; fy[e.target] -= ny;
+      }
+    });
+
+    nodes.forEach(function(node) {
+      const pos = positions[node.id];
+      const dx = centerX - pos.x;
+      const dy = centerY - pos.y;
+      fx[node.id] += dx * 0.008;
+      fy[node.id] += dy * 0.008;
+    });
+
+    const maxStep = 40 * temp;
+    nodes.forEach(function(node) {
+      const id = node.id;
+      const stepX = Math.max(-maxStep, Math.min(maxStep, fx[id]));
+      const stepY = Math.max(-maxStep, Math.min(maxStep, fy[id]));
+      positions[id].x = Math.max(90, Math.min(width - 90, positions[id].x + stepX));
+      positions[id].y = Math.max(60, Math.min(height - 60, positions[id].y + stepY));
+    });
+  }
+
   return positions;
+}
+
+
+function enableKnowledgeGraphDragging(svg, positions) {
+  if (!svg) return;
+
+  const toSvgPoint = function(event) {
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const matrix = svg.getScreenCTM();
+    return matrix ? point.matrixTransform(matrix.inverse()) : point;
+  };
+
+  const updateEdges = function(nodeId) {
+    const pos = positions[nodeId];
+    if (!pos) return;
+    svg.querySelectorAll(".graph-edge").forEach(function(edge) {
+      if (edge.dataset.source === nodeId) {
+        edge.setAttribute("x1", pos.x);
+        edge.setAttribute("y1", pos.y);
+      }
+      if (edge.dataset.target === nodeId) {
+        edge.setAttribute("x2", pos.x);
+        edge.setAttribute("y2", pos.y);
+      }
+    });
+  };
+
+  svg.querySelectorAll(".graph-node").forEach(function(nodeEl) {
+    let pointerId = null;
+    let startPoint = null;
+    let startPosition = null;
+    let dragged = false;
+
+    nodeEl.addEventListener("pointerdown", function(event) {
+      if (event.button !== 0) return;
+      pointerId = event.pointerId;
+      startPoint = toSvgPoint(event);
+      const nodeId = nodeEl.dataset.id;
+      const pos = positions[nodeId];
+      if (!pos) return;
+      startPosition = { x: pos.x, y: pos.y };
+      dragged = false;
+      nodeEl.classList.add("dragging");
+      nodeEl.setPointerCapture(pointerId);
+      event.preventDefault();
+    });
+
+    nodeEl.addEventListener("pointermove", function(event) {
+      if (pointerId === null || event.pointerId !== pointerId || !startPoint || !startPosition) return;
+      const point = toSvgPoint(event);
+      const dx = point.x - startPoint.x;
+      const dy = point.y - startPoint.y;
+      if (!dragged && Math.hypot(dx, dy) < 3) return;
+      dragged = true;
+      const nodeId = nodeEl.dataset.id;
+      positions[nodeId] = {
+        x: startPosition.x + dx,
+        y: startPosition.y + dy
+      };
+      nodeEl.setAttribute(
+        "transform",
+        "translate(" + positions[nodeId].x + "," + positions[nodeId].y + ")"
+      );
+      updateEdges(nodeId);
+      event.preventDefault();
+    });
+
+    const finishDrag = function(event) {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      try {
+        nodeEl.releasePointerCapture(pointerId);
+      } catch (_) {}
+      nodeEl.classList.remove("dragging");
+      pointerId = null;
+      startPoint = null;
+      startPosition = null;
+      if (dragged) event.preventDefault();
+    };
+
+    nodeEl.addEventListener("pointerup", finishDrag);
+    nodeEl.addEventListener("pointercancel", finishDrag);
+
+    nodeEl.addEventListener("click", function(event) {
+      if (dragged) {
+        dragged = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      navigateToNote(nodeEl.dataset.path);
+    });
+  });
 }
 
 async function loadKnowledgeGraph() {
@@ -688,32 +875,30 @@ async function loadKnowledgeGraph() {
   if (!stage) return;
   stage.innerHTML = '<div class="empty">正在构建关系图…</div>';
   try {
-    const folder = document.getElementById("graphFolder")?.value || "";
+    const folder = window.NexusUI?.getPickerValue("graphFolderPicker", state.graphFolder || "") || "";
     const data = await api("/api/graph" + (folder ? "?folder=" + encodeURIComponent(folder) : ""));
     stats.textContent = data.node_count + " 个节点 · " + data.edge_count + " 条关系";
     if (!data.nodes.length) {
       stage.innerHTML = '<div class="empty">当前范围没有 Markdown 节点</div>';
       return;
     }
-    const width = 1200, height = 680;
-    const positions = graphPositions(data.nodes, width, height);
+    const width = 1400, height = 760;
+    const positions = graphPositions(data.nodes, data.edges, width, height);
     const edges = data.edges.map(function(edge) {
       const a = positions[edge.source], b = positions[edge.target];
       if (!a || !b) return "";
-      return '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" class="graph-edge" />';
+      return '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" class="graph-edge" data-source="' + esc(edge.source) + '" data-target="' + esc(edge.target) + '" />';
     }).join("");
     const nodes = data.nodes.map(function(node) {
       const pos = positions[node.id];
-      const radius = Math.max(7, Math.min(17, 7 + (node.degree || 0) * 1.2));
-      const label = node.title.length > 18 ? node.title.slice(0, 18) + "…" : node.title;
-      return '<g class="graph-node" data-path="' + esc(node.path) + '" transform="translate(' + pos.x + ',' + pos.y + ')">'
+      const radius = Math.max(8, Math.min(18, 8 + (node.degree || 0) * 1.3));
+      const label = node.title.length > 22 ? node.title.slice(0, 22) + "…" : node.title;
+      return '<g class="graph-node" data-id="' + esc(node.id) + '" data-path="' + esc(node.path) + '" transform="translate(' + pos.x + ',' + pos.y + ')">'
         + '<circle r="' + radius + '"></circle>'
         + '<text y="' + (radius + 14) + '" text-anchor="middle">' + esc(label) + '</text></g>';
     }).join("");
     stage.innerHTML = '<svg class="knowledge-svg" viewBox="0 0 ' + width + ' ' + height + '" role="img">' + edges + nodes + '</svg>';
-    stage.querySelectorAll(".graph-node").forEach(function(el) {
-      el.addEventListener("click", function() { navigateToNote(el.dataset.path); });
-    });
+    enableKnowledgeGraphDragging(stage.querySelector(".knowledge-svg"), positions);
   } catch (e) {
     stage.innerHTML = '<div class="empty">图谱加载失败：' + esc(e.message) + '</div>';
   }
@@ -1056,34 +1241,206 @@ async function syncWorkflow() {
 }
 
 function reviewTemplate() {
+  const scopePickerHtml = window.NexusUI?.renderPickerHTML({
+    id: "reviewAuthorScopePicker",
+    value: state.reviewAuthorScope || "current_user",
+    options: [
+      { value: "current_user", label: t("review.currentUser"), i18n: "review.currentUser" },
+      { value: "all_users", label: t("review.allUsers"), i18n: "review.allUsers" }
+    ]
+  }) || "";
+  setTimeout(loadPushChannelCheckboxes, 50);
   return '<div class="grid two"><div class="card"><h3>' + t("review.generate") + '</h3>'
     + '<p class="muted">' + t("review.description") + '</p>'
     + '<div class="form-group"><label>' + t("review.isoWeek") + '</label><input id="reviewWeek" class="input" placeholder="2026-W38" /></div>'
-    + '<div class="form-group"><label>' + t("review.scope") + '</label><select id="reviewAuthorScope" class="input"><option value="current_user">' + t("review.currentUser") + '</option><option value="all_users">' + t("review.allUsers") + '</option></select></div>'
+    + '<div class="form-group"><label>' + t("review.scope") + '</label>' + scopePickerHtml + '</div>'
+    + '<div class="form-group"><label>📢 推送通知渠道 (可选)</label><div id="reviewPushChannels" class="channel-checkbox-group"><span class="muted">正在读取渠道…</span></div></div>'
     + '<div class="actions" style="margin-top:14px"><button class="btn" onclick="runReview()">' + t("review.generate") + '</button></div></div>'
     + '<div class="card viewer"><h3>' + t("review.result") + '</h3><div id="reviewResult" class="empty">' + t("review.resultHint") + '</div></div></div>';
 }
 
+async function loadPushChannelCheckboxes(containerId = "reviewPushChannels") {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  try {
+    const data = await api("/api/notifications/channels");
+    const channels = data.channels || [];
+    if (!channels.length) {
+      el.innerHTML = '<span class="muted">暂未配置推送渠道，可前往【推送渠道】管理台配置</span>';
+      return;
+    }
+    el.innerHTML = channels.map(function(c) {
+      return '<label class="checkbox-label" style="margin-right:12px;display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" name="pushChannel" value="' + esc(c.id) + '" ' + (c.enabled ? "checked" : "") + ' /> ' + esc(c.name) + ' (' + esc(c.type) + ')</label>';
+    }).join("");
+  } catch (e) {
+    el.innerHTML = '<span class="muted">读取渠道失败：' + esc(e.message) + '</span>';
+  }
+}
+
+function getSelectedPushChannels(containerId = "reviewPushChannels") {
+  const container = document.getElementById(containerId);
+  if (!container) return null;
+  const checked = Array.from(container.querySelectorAll('input[name="pushChannel"]:checked')).map(el => el.value);
+  return checked.length ? checked : null;
+}
+
 async function runReview() {
   const week = document.getElementById("reviewWeek").value.trim() || null;
-  const authorScope = document.getElementById("reviewAuthorScope").value;
+  const authorScope = window.NexusUI?.getPickerValue("reviewAuthorScopePicker", state.reviewAuthorScope || "current_user") || "current_user";
+  const pushChannels = getSelectedPushChannels("reviewPushChannels");
   const resultEl = document.getElementById("reviewResult");
   try {
-    const result = await api("/mcp/vault_weekly_review", { method: "POST", body: JSON.stringify({ week: week, author_scope: authorScope }) });
+    const result = await api("/mcp/vault_weekly_review", {
+      method: "POST",
+      body: JSON.stringify({ week: week, author_scope: authorScope, push_channels: pushChannels })
+    });
     const note = await api("/mcp/vault_read", { method: "POST", body: JSON.stringify({ path: result.path }) });
+    let pushBadge = "";
+    if (result.notification_result) {
+      const status = result.notification_result.status;
+      pushBadge = '<span class="badge ' + (status === "success" ? "ok" : "warn") + '">推送: ' + esc(status) + ' (' + result.notification_result.sent_count + ')</span>';
+    }
     resultEl.className = "review-report";
     resultEl.innerHTML = '<div class="result-head"><div><strong>' + esc(t("review.weekly", { week: result.week })) + '</strong>'
       + '<div class="path">' + esc(result.path) + '</div></div><div class="actions">'
       + '<span class="badge ok">' + result.git_commits + ' commits</span>'
       + '<span class="badge">' + esc(authorScope === "all_users" ? t("review.allUsers") : t("review.currentUser")) + '</span>'
       + '<span class="badge">' + esc(t("review.activeRepos", { count: (result.git_active_repositories || []).length })) + '</span>'
-      + '<span class="badge">' + esc(t("review.knowledgeTopics", { count: result.knowledge_topics || 0 })) + '</span></div></div>'
+      + '<span class="badge">' + esc(t("review.knowledgeTopics", { count: result.knowledge_topics || 0 })) + '</span>'
+      + pushBadge + '</div></div>'
       + '<article class="markdown-body review-markdown">' + renderMarkdown(note.content) + '</article>';
     bindWikiLinks(resultEl);
     toast(t("review.done"));
   } catch (e) {
     resultEl.className = "empty";
     resultEl.textContent = t("review.failed", { error: e.message });
+  }
+}
+
+async function renderNotifications() {
+  app.innerHTML = '<div class="grid two"><div class="card"><h3>已配置推送渠道</h3>'
+    + '<p class="muted">支持飞书、钉钉、邮件及通用 Webhook 通道，生成的复盘报告与提炼知识可自主选择推送。</p>'
+    + '<div id="channelList" class="list" style="margin-top:12px"><div class="empty">正在读取渠道配置…</div></div></div>'
+    + '<div class="card"><h3>添加 / 编辑渠道</h3>'
+    + '<div class="form-group"><label>渠道 ID</label><input id="channelId" class="input" placeholder="e.g. feishu_dev" /></div>'
+    + '<div class="form-group"><label>渠道名称</label><input id="channelName" class="input" placeholder="e.g. 飞书开发通知群" /></div>'
+    + '<div class="form-group"><label>渠道类型</label><select id="channelType" class="input" onchange="onChannelTypeChange()"><option value="feishu">飞书自定义机器人 (Feishu)</option><option value="dingtalk">钉钉自定义机器人 (DingTalk)</option><option value="email">邮件 SMTP (Email)</option><option value="webhook">通用 Webhook (Generic Webhook)</option></select></div>'
+    + '<div id="channelTypeFields"></div>'
+    + '<div class="actions" style="margin-top:16px"><button class="btn" onclick="addOrUpdateChannel()">保存该渠道</button></div></div></div>';
+  onChannelTypeChange();
+  await loadNotificationChannels();
+}
+
+function onChannelTypeChange() {
+  const type = document.getElementById("channelType").value;
+  const fieldsEl = document.getElementById("channelTypeFields");
+  if (type === "feishu" || type === "dingtalk" || type === "webhook") {
+    fieldsEl.innerHTML = '<div class="form-group"><label>Webhook URL</label><input id="channelUrl" class="input" placeholder="https://..." /></div>'
+      + '<div class="form-group"><label>Secret 密钥 (可选)</label><input id="channelSecret" class="input" type="password" placeholder="若设置了加签密钥请填入" /></div>'
+      + (type === "webhook" ? '<div class="form-group"><label>自定义 Header (JSON, 可选)</label><input id="channelHeaders" class="input" placeholder=\'{"Authorization": "Bearer xxx"}\' /></div>' : "");
+  } else if (type === "email") {
+    fieldsEl.innerHTML = '<div class="form-group"><label>SMTP 主机</label><input id="smtpHost" class="input" placeholder="smtp.example.com" /></div>'
+      + '<div class="form-group"><label>SMTP 端口</label><input id="smtpPort" class="input" type="number" value="465" /></div>'
+      + '<div class="form-group"><label>SMTP 用户名</label><input id="smtpUser" class="input" placeholder="user@example.com" /></div>'
+      + '<div class="form-group"><label>SMTP 密码</label><input id="smtpPass" class="input" type="password" placeholder="密码/授权码" /></div>'
+      + '<div class="form-group"><label>收件人列表 (逗号分隔)</label><input id="emailRecipients" class="input" placeholder="team@example.com, admin@example.com" /></div>';
+  }
+}
+
+async function loadNotificationChannels() {
+  const listEl = document.getElementById("channelList");
+  if (!listEl) return;
+  try {
+    const data = await api("/api/notifications/channels");
+    state.notificationConfig = data;
+    const channels = data.channels || [];
+    if (!channels.length) {
+      listEl.innerHTML = '<div class="empty">暂未配置任何推送渠道</div>';
+      return;
+    }
+    listEl.innerHTML = channels.map(function(c) {
+      const typeBadge = '<span class="badge">' + esc(c.type.toUpperCase()) + '</span>';
+      const statusBadge = c.enabled ? '<span class="badge ok">已启用</span>' : '<span class="badge warn">已禁用</span>';
+      const detail = c.type === "email" ? ("SMTP: " + esc(c.smtp_host) + " -> " + esc((c.recipients || []).join(", "))) : ("URL: " + esc(c.url));
+      return '<div class="list-item" style="display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid var(--border-color);">'
+        + '<div><strong>' + esc(c.name) + '</strong> (' + esc(c.id) + ')'
+        + '<div class="path" style="margin-top:4px;font-size:12px;">' + detail + '</div></div>'
+        + '<div class="actions" style="display:flex;gap:6px;align-items:center;">' + typeBadge + statusBadge
+        + '<button class="btn ghost btn-sm" onclick="testChannel(\'' + esc(c.id) + '\')">测试</button>'
+        + '<button class="btn ghost btn-sm danger" onclick="deleteChannel(\'' + esc(c.id) + '\')">删除</button></div></div>';
+    }).join("");
+  } catch (e) {
+    listEl.innerHTML = '<div class="empty">读取渠道失败：' + esc(e.message) + '</div>';
+  }
+}
+
+async function addOrUpdateChannel() {
+  const id = document.getElementById("channelId").value.trim();
+  const name = document.getElementById("channelName").value.trim() || id;
+  const type = document.getElementById("channelType").value;
+  if (!id) return toast("请填入渠道 ID", true);
+
+  const existing = state.notificationConfig?.channels || [];
+  const newChannel = { id: id, name: name, type: type, enabled: true };
+
+  if (type === "feishu" || type === "dingtalk" || type === "webhook") {
+    newChannel.url = document.getElementById("channelUrl").value.trim();
+    newChannel.secret = document.getElementById("channelSecret").value.trim();
+    if (type === "webhook" && document.getElementById("channelHeaders").value.trim()) {
+      try {
+        newChannel.headers = JSON.parse(document.getElementById("channelHeaders").value.trim());
+      } catch (_) { return toast("Header JSON 格式不正确", true); }
+    }
+  } else if (type === "email") {
+    newChannel.smtp_host = document.getElementById("smtpHost").value.trim();
+    newChannel.smtp_port = parseInt(document.getElementById("smtpPort").value) || 465;
+    newChannel.smtp_user = document.getElementById("smtpUser").value.trim();
+    newChannel.smtp_pass = document.getElementById("smtpPass").value.trim();
+    const recipients = document.getElementById("emailRecipients").value.split(",").map(s => s.trim()).filter(Boolean);
+    newChannel.recipients = recipients;
+  }
+
+  const updatedChannels = existing.filter(c => c.id !== id).concat([newChannel]);
+  try {
+    await api("/api/notifications/channels", {
+      method: "POST",
+      body: JSON.stringify({ default_channel_id: state.notificationConfig?.default_channel_id || id, channels: updatedChannels })
+    });
+    toast("推送渠道保存成功");
+    await loadNotificationChannels();
+  } catch (e) {
+    toast("保存失败：" + e.message, true);
+  }
+}
+
+async function deleteChannel(id) {
+  const existing = state.notificationConfig?.channels || [];
+  const updatedChannels = existing.filter(c => c.id !== id);
+  try {
+    await api("/api/notifications/channels", {
+      method: "POST",
+      body: JSON.stringify({ default_channel_id: state.notificationConfig?.default_channel_id === id ? null : state.notificationConfig?.default_channel_id, channels: updatedChannels })
+    });
+    toast("推送渠道已删除");
+    await loadNotificationChannels();
+  } catch (e) {
+    toast("删除失败：" + e.message, true);
+  }
+}
+
+async function testChannel(id) {
+  const channel = (state.notificationConfig?.channels || []).find(c => c.id === id);
+  if (!channel) return toast("未找到该渠道", true);
+  toast("正在测试渠道: " + channel.name + "…");
+  try {
+    const res = await api("/api/notifications/test", { method: "POST", body: JSON.stringify(channel) });
+    if (res.status === "success") {
+      toast("📢 测试成功: " + channel.name);
+    } else {
+      toast("❌ 测试失败: " + (res.error || "未知错误"), true);
+    }
+  } catch (e) {
+    toast("❌ 测试报错: " + e.message, true);
   }
 }
 async function loadRuntime() {
@@ -1131,13 +1488,26 @@ async function renderCurrent() {
   }
   titleEl.textContent = t(titleKeys[state.view]);
   if (state.view === "dashboard") return renderDashboard();
-  if (state.view === "search") app.innerHTML = searchTemplate();
+  if (state.view === "search") {
+    app.innerHTML = searchTemplate();
+    window.NexusUI?.setupPicker("searchFolderPicker", function(val) {
+      state.searchFolder = val;
+    });
+    return;
+  }
   if (state.view === "graph") return renderGraph();
   if (state.view === "ingest") { app.innerHTML = ingestTemplate(); return loadReferences(); }
   if (state.view === "compile") return renderCompile();
   if (state.view === "governance") return renderGovernance();
   if (state.view === "workflow") return renderWorkflow();
-  if (state.view === "review") app.innerHTML = reviewTemplate();
+  if (state.view === "review") {
+    app.innerHTML = reviewTemplate();
+    window.NexusUI?.setupPicker("reviewAuthorScopePicker", function(val) {
+      state.reviewAuthorScope = val;
+    });
+    return;
+  }
+  if (state.view === "notifications") return renderNotifications();
 }
 
 window.switchView = async function(view) {

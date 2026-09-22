@@ -29,6 +29,7 @@ dist/
 vault/
 docs/
 workflow-config.json
+notification-config.json
 
 # Local runtime/config
 .env

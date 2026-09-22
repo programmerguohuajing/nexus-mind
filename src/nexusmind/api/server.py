@@ -28,6 +28,13 @@ from nexusmind.core.git_activity import (
     sync_git_activity,
 )
 from nexusmind.core.ingest import ingest_article
+from nexusmind.core.notification import (
+    load_notification_config,
+    save_notification_config,
+    sanitize_channel_config,
+    send_notification,
+    test_notification_channel,
+)
 from nexusmind.core.web_ingest import fetch_web_page
 from nexusmind.core.occ import get_file_hash
 from nexusmind.core.review import generate_weekly_review
@@ -79,6 +86,7 @@ class CompileRequest(BaseModel):
     conflict_detected: bool = False
     conflict_summary: Optional[str] = None
     ifMatch: Optional[str] = None
+    push_channels: Optional[List[str]] = None
 
 
 class IngestRequest(BaseModel):
@@ -98,6 +106,37 @@ class WebIngestRequest(BaseModel):
 class ReviewRequest(BaseModel):
     week: Optional[str] = None
     author_scope: str = "current_user"
+    push_channels: Optional[List[str]] = None
+
+
+class NotificationChannelModel(BaseModel):
+    id: str
+    name: Optional[str] = None
+    type: str
+    enabled: bool = True
+    url: Optional[str] = None
+    secret: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = 465
+    smtp_user: Optional[str] = None
+    smtp_pass: Optional[str] = None
+    use_tls: Optional[bool] = True
+    sender: Optional[str] = None
+    recipients: Optional[List[str]] = Field(default_factory=list)
+    headers: Optional[Dict[str, str]] = Field(default_factory=dict)
+
+
+class NotificationConfigRequest(BaseModel):
+    default_channel_id: Optional[str] = None
+    channels: List[NotificationChannelModel] = Field(default_factory=list)
+
+
+class NotificationPushRequest(BaseModel):
+    title: str
+    content: str
+    channels: Optional[List[str]] = None
+    event_type: str = "general"
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
 class WorkflowTarget(BaseModel):
@@ -274,6 +313,7 @@ def vault_compile_endpoint(req: CompileRequest):
             conflict_detected=req.conflict_detected,
             conflict_summary=req.conflict_summary,
             if_match=req.ifMatch,
+            push_channels=req.push_channels,
         )
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -292,8 +332,8 @@ def vault_compile_pending_preview():
 
 
 @app.post("/mcp/vault_incremental_compile")
-def vault_incremental_compile_endpoint():
-    return {"status": "success", "results": auto_compile_pending_sources()}
+def vault_incremental_compile_endpoint(push_channels: Optional[List[str]] = None):
+    return {"status": "success", "results": auto_compile_pending_sources(push_channels=push_channels)}
 
 
 @app.post("/mcp/vault_rebuild_indices")
@@ -653,9 +693,58 @@ def vault_ingest_endpoint(req: IngestRequest):
 @app.post("/mcp/vault_weekly_review")
 def vault_weekly_review_endpoint(req: ReviewRequest):
     try:
-        return generate_weekly_review(week_str=req.week, author_scope=req.author_scope)
+        return generate_weekly_review(
+            week_str=req.week,
+            author_scope=req.author_scope,
+            push_channels=req.push_channels,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/notifications/channels")
+def get_notification_channels():
+    config = load_notification_config()
+    sanitized_channels = [sanitize_channel_config(c) for c in config.get("channels", [])]
+    return {
+        "default_channel_id": config.get("default_channel_id"),
+        "channels": sanitized_channels,
+    }
+
+
+@app.post("/api/notifications/channels")
+def update_notification_channels(req: NotificationConfigRequest):
+    try:
+        channels_data = [ch.model_dump(exclude_unset=True) for ch in req.channels]
+        saved = save_notification_config(channels_data, default_channel_id=req.default_channel_id)
+        sanitized = [sanitize_channel_config(c) for c in saved.get("channels", [])]
+        return {
+            "status": "success",
+            "default_channel_id": saved.get("default_channel_id"),
+            "channels": sanitized,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/notifications/test")
+def test_notification_channel_endpoint(channel: NotificationChannelModel):
+    try:
+        res = test_notification_channel(channel.model_dump(exclude_unset=True))
+        return res
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/notifications/push")
+def push_notification_endpoint(req: NotificationPushRequest):
+    return send_notification(
+        title=req.title,
+        content=req.content,
+        channel_ids=req.channels,
+        event_type=req.event_type,
+        metadata=req.metadata,
+    )
 
 
 app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")

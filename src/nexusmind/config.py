@@ -10,6 +10,9 @@ VAULT_ROOT = Path(os.environ.get("NEXUSMIND_VAULT_ROOT", DEFAULT_VAULT_ROOT)).ex
 WORKFLOW_CONFIG_PATH = Path(
     os.environ.get("NEXUSMIND_WORKFLOW_CONFIG", DATA_ROOT / "workflow-config.json")
 ).expanduser().resolve()
+NOTIFICATION_CONFIG_PATH = Path(
+    os.environ.get("NEXUSMIND_NOTIFICATION_CONFIG", DATA_ROOT / "notification-config.json")
+).expanduser().resolve()
 CLOUD_SYNC_URL = os.environ.get("NEXUSMIND_CLOUD_SYNC_URL", "").strip()
 CLOUD_SYNC_TOKEN = os.environ.get("NEXUSMIND_CLOUD_SYNC_TOKEN", "").strip()
 

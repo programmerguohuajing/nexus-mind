@@ -81,3 +81,29 @@ def test_brand_assets_and_web_favicon_are_present():
     index = (root / "src/nexusmind/web/index.html").read_text(encoding="utf-8")
     assert '/favicon.ico' in index
     assert '/assets/nexusmind-agent.svg' in index
+
+
+def test_cloud_vault_search_returns_matches_and_results():
+    import asyncio
+    from starlette.requests import Request
+    from nexusmind.cloud.app import vault_search, SearchRequest
+
+    class DummyDB:
+        def prepare(self, sql):
+            return self
+        def bind(self, *args):
+            return self
+        async def raw(self, columnNames=True):
+            return []
+
+    class DummyEnv:
+        DB = DummyDB()
+
+    req = SearchRequest(query="test", limit=10)
+    scope = {"type": "http", "env": DummyEnv()}
+    request = Request(scope)
+    data = asyncio.run(vault_search(req, request))
+    assert "matches" in data
+    assert "results" in data
+    assert isinstance(data["matches"], list)
+    assert isinstance(data["results"], list)

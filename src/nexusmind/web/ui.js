@@ -11,6 +11,12 @@
       "nav.governance": "知识治理",
       "nav.workflow": "工作流",
       "nav.review": "周复盘",
+      "nav.notifications": "推送渠道",
+      "notifications.title": "推送渠道管理",
+      "notifications.subtitle": "配置飞书、钉钉、邮件及通用 Webhook 通知渠道",
+      "notifications.add": "添加推送渠道",
+      "notifications.pushReport": "一键推送复盘报告",
+      "notifications.pushNotice": "选择推送渠道",
       "action.refresh": "刷新",
       "action.apiDocs": "API 文档",
       "status.connecting": "正在连接服务…",
@@ -108,6 +114,12 @@
       "nav.governance": "Governance",
       "nav.workflow": "Workflow",
       "nav.review": "Weekly Review",
+      "nav.notifications": "Notifications",
+      "notifications.title": "Notification Channels",
+      "notifications.subtitle": "Configure Feishu, DingTalk, Email, and Generic Webhook push channels",
+      "notifications.add": "Add Channel",
+      "notifications.pushReport": "Push Report",
+      "notifications.pushNotice": "Select Channels",
       "action.refresh": "Refresh",
       "action.apiDocs": "API Docs",
       "status.connecting": "Connecting…",
@@ -200,8 +212,16 @@
   const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
 
   function defaultLanguage() {
-    return navigator.language && navigator.language.toLowerCase().startsWith("zh")
-      ? "zh-CN" : "en-US";
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlLang = urlParams.get("lang");
+    if (urlLang && supportedLanguages.includes(urlLang)) return urlLang;
+    return "zh-CN";
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlLang = urlParams.get("lang");
+  if (urlLang && supportedLanguages.includes(urlLang)) {
+    localStorage.setItem("nexusmind.language", urlLang);
   }
 
   let language = localStorage.getItem("nexusmind.language") || defaultLanguage();
@@ -293,15 +313,27 @@
   }
 
   function syncPicker(id, value) {
-    const picker = document.getElementById(id);
+    const picker = typeof id === "string" ? document.getElementById(id) : id;
     if (!picker) return;
-    const current = picker.querySelector('[data-value="' + value + '"]');
+    const targetValue = value !== undefined ? value : picker.dataset.value;
+    let current = targetValue !== undefined ? picker.querySelector('[data-value="' + targetValue + '"]') : null;
+    if (!current) current = picker.querySelector(".top-picker-menu button.active") || picker.querySelector("[data-value]");
     const valueEl = picker.querySelector(".picker-value");
-    if (current && valueEl) valueEl.textContent = current.textContent;
+    if (current && valueEl) {
+      valueEl.textContent = current.textContent;
+      picker.dataset.value = current.dataset.value;
+    }
     picker.querySelectorAll("[data-value]").forEach((item) => {
-      item.classList.toggle("active", item.dataset.value === value);
-      item.setAttribute("aria-checked", item.dataset.value === value ? "true" : "false");
+      const active = current ? item === current : item.dataset.value === targetValue;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-checked", active ? "true" : "false");
     });
+  }
+
+  function getPickerValue(id, defaultValue) {
+    const picker = typeof id === "string" ? document.getElementById(id) : id;
+    if (!picker) return defaultValue ?? "";
+    return picker.dataset.value ?? picker.querySelector(".top-picker-menu button.active")?.dataset.value ?? defaultValue ?? "";
   }
 
   function closePickers(except) {
@@ -312,10 +344,26 @@
     });
   }
 
-  function setupPicker(id, onSelect) {
-    const picker = document.getElementById(id);
-    if (!picker || picker.dataset.bound === "true") return;
+  function setupPicker(id, onSelect, initialValue) {
+    const picker = typeof id === "string" ? document.getElementById(id) : id;
+    if (!picker) return;
+    if (initialValue !== undefined) {
+      picker.dataset.value = initialValue;
+      syncPicker(picker, initialValue);
+    } else if (picker.dataset.value !== undefined) {
+      syncPicker(picker, picker.dataset.value);
+    } else {
+      const activeBtn = picker.querySelector(".top-picker-menu button.active") || picker.querySelector(".top-picker-menu button");
+      if (activeBtn) {
+        picker.dataset.value = activeBtn.dataset.value;
+        syncPicker(picker, activeBtn.dataset.value);
+      }
+    }
+
+    if (typeof onSelect === "function") picker.__onSelect = onSelect;
+    if (picker.dataset.bound === "true") return;
     picker.dataset.bound = "true";
+
     const trigger = picker.querySelector(".top-picker-button");
     trigger?.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -324,13 +372,39 @@
       picker.classList.toggle("open", willOpen);
       trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
     });
+
     picker.querySelectorAll("[data-value]").forEach((item) => {
-      item.addEventListener("click", () => {
-        onSelect(item.dataset.value);
+      item.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const val = item.dataset.value;
+        picker.dataset.value = val;
+        syncPicker(picker, val);
         picker.classList.remove("open");
         trigger?.setAttribute("aria-expanded", "false");
+        if (typeof picker.__onSelect === "function") {
+          picker.__onSelect(val);
+        }
       });
     });
+  }
+
+  function renderPickerHTML(config) {
+    const idAttr = config.id ? ' id="' + config.id + '"' : "";
+    const extraClass = config.className ? " " + config.className : "";
+    const initialVal = config.value !== undefined ? config.value : (config.options[0] ? config.options[0].value : "");
+    const initialOpt = config.options.find(function(o) { return o.value === initialVal; }) || config.options[0] || { label: "" };
+    
+    const menuButtons = config.options.map(function(opt) {
+      const i18nAttr = opt.i18n ? ' data-i18n="' + opt.i18n + '"' : "";
+      const activeClass = opt.value === initialVal ? ' class="active" aria-checked="true"' : ' aria-checked="false"';
+      return '<button type="button" data-value="' + (opt.value ?? "") + '"' + i18nAttr + activeClass + '>' + opt.label + '</button>';
+    }).join("");
+
+    return '<div class="ui-picker' + extraClass + '"' + idAttr + ' data-value="' + (initialVal ?? "") + '">'
+      + '<button class="top-picker-button" type="button" aria-haspopup="menu" aria-expanded="false">'
+      + '<span class="picker-value">' + initialOpt.label + '</span>'
+      + '<span class="picker-chevron" aria-hidden="true"></span></button>'
+      + '<div class="top-picker-menu" role="menu">' + menuButtons + '</div></div>';
   }
 
   function applyStaticTranslations() {
@@ -344,7 +418,13 @@
     });
     syncPicker("languagePicker", language);
     syncPicker("themePicker", theme);
+    document.querySelectorAll(".ui-picker").forEach(function(picker) {
+      if (picker.id !== "languagePicker" && picker.id !== "themePicker") {
+        syncPicker(picker, picker.dataset.value);
+      }
+    });
   }
+
   function setLanguage(value) {
     if (!supportedLanguages.includes(value) || value === language) return;
     language = value;
@@ -381,12 +461,17 @@
   systemDark.addEventListener?.("change", () => {
     if (theme === "system") applyTheme();
   });
+
   window.NexusUI = {
     t,
     bind,
     setLanguage,
     setTheme,
     localize,
+    syncPicker,
+    setupPicker,
+    getPickerValue,
+    renderPickerHTML,
     getLanguage: () => language,
     getTheme: () => theme,
     supportedLanguages: supportedLanguages.slice(),

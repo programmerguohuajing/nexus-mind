@@ -94,9 +94,11 @@ def search_notes(
         })
 
     results.sort(key=lambda item: (-item["score"], item["path"].lower()))
+    matches = results[:limit]
     return {
         "query": query,
         "folder": folder,
         "total": len(results),
-        "matches": results[:limit],
+        "matches": matches,
+        "results": matches,
     }

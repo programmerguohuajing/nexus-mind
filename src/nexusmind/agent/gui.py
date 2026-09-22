@@ -8,7 +8,7 @@ import webbrowser
 import psutil
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal, QSettings
+from PySide6.QtCore import QObject, QPoint, Qt, Signal, QSettings, QThread
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
@@ -47,6 +47,46 @@ from nexusmind.agent.runtime import AgentStatus, AgentSupervisor
 
 class StatusBridge(QObject):
     changed = Signal(object)
+
+
+
+class CloudConnectionTestWorker(QObject):
+    finished = Signal(object)
+
+    def __init__(self, endpoint: str, token: str):
+        super().__init__()
+        self.endpoint = endpoint
+        self.token = token
+
+    def run(self) -> None:
+        started = time.perf_counter()
+        response = None
+        try:
+            import httpx
+
+            response = httpx.get(
+                self.endpoint,
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=8.0,
+            )
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            response.raise_for_status()
+            payload = response.json()
+            self.finished.emit({
+                "ok": True,
+                "status_code": response.status_code,
+                "elapsed_ms": elapsed_ms,
+                "payload": payload,
+            })
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            self.finished.emit({
+                "ok": False,
+                "status_code": getattr(response, "status_code", None),
+                "elapsed_ms": elapsed_ms,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
 
 
 class PreferenceButton(QPushButton):
@@ -379,10 +419,27 @@ class AgentWindow(QMainWindow):
         form.addRow("同步令牌", self.cloud_token)
         layout.addLayout(form)
 
-        test_button = QPushButton("测试连接")
-        test_button.setObjectName("secondaryButton")
-        test_button.clicked.connect(self._test_cloud)
-        layout.addWidget(test_button, 0, Qt.AlignRight)
+        test_row = QHBoxLayout()
+        test_row.setSpacing(10)
+
+        self.cloud_test_status = QLabel("")
+        self.cloud_test_status.setObjectName("cloudTestStatus")
+        self.cloud_test_status.setVisible(False)
+        test_row.addWidget(self.cloud_test_status, 1)
+
+        self.cloud_test_button = QPushButton("测试连接")
+        self.cloud_test_button.setObjectName("secondaryButton")
+        self.cloud_test_button.clicked.connect(self._test_cloud)
+        test_row.addWidget(self.cloud_test_button, 0, Qt.AlignRight)
+        layout.addLayout(test_row)
+
+        self.cloud_test_progress = QProgressBar()
+        self.cloud_test_progress.setObjectName("cloudTestProgress")
+        self.cloud_test_progress.setRange(0, 0)
+        self.cloud_test_progress.setTextVisible(False)
+        self.cloud_test_progress.setFixedHeight(4)
+        self.cloud_test_progress.setVisible(False)
+        layout.addWidget(self.cloud_test_progress)
         return box
 
     def _folders_group(self) -> QGroupBox:
@@ -855,16 +912,19 @@ class AgentWindow(QMainWindow):
             QPushButton#subtleButton:hover {
                 background: #F3F7FB;
             }
-            QProgressBar#syncProgress {
+            QProgressBar#syncProgress,
+            QProgressBar#cloudTestProgress {
                 border: 0;
                 border-radius: 4px;
                 background: #E6EEF8;
             }
-            QProgressBar#syncProgress::chunk {
+            QProgressBar#syncProgress::chunk,
+            QProgressBar#cloudTestProgress::chunk {
                 border-radius: 4px;
                 background: #1689E6;
             }
-            QLabel#syncProgressLabel {
+            QLabel#syncProgressLabel,
+            QLabel#cloudTestStatus {
                 color: #5F6D84;
                 font-size: 11px;
                 font-weight: 600;
@@ -1061,7 +1121,7 @@ class AgentWindow(QMainWindow):
             QMessageBox.information(self, "本地 API 未启用", "请先启用本地 API。")
             return
         webbrowser.open(
-            f"http://{self.local_api_host.text()}:{self.local_api_port.value()}/"
+            f"http://{self.local_api_host.text()}:{self.local_api_port.value()}/?lang=zh-CN"
         )
 
     def _show_cloud_dialog(
@@ -1298,6 +1358,26 @@ class AgentWindow(QMainWindow):
         """)
         dialog.exec()
 
+    def _set_cloud_test_busy(self, busy: bool) -> None:
+        english = self.ui_language == "en-US"
+        self.cloud_test_button.setEnabled(not busy)
+        self.cloud_test_button.setText(
+            ("Testing…" if busy else "Test connection")
+            if english
+            else ("正在检测…" if busy else "测试连接")
+        )
+        self.cloud_test_status.setVisible(busy)
+        self.cloud_test_progress.setVisible(busy)
+        if busy:
+            self.cloud_test_status.setText(
+                "正在检测 Cloud API 与令牌，请稍候…"
+                if not english
+                else "Checking Cloud API and token…"
+            )
+            self.cloud_test_status.setStyleSheet("color:#5F6D84;font-weight:600;")
+            self.cloud_summary.value_label.setText("检测中…" if not english else "Checking…")
+            self.cloud_summary.value_label.setStyleSheet("color:#0877E4;")
+
     def _test_cloud(self) -> None:
         url = self.cloud_url.text().strip().rstrip("/")
         token = self.cloud_token.text().strip()
@@ -1314,35 +1394,59 @@ class AgentWindow(QMainWindow):
         if not token:
             self._show_cloud_dialog(
                 "无法测试连接",
-                "还没有配置同步令牌，请填写与 Worker SYNC_TOKEN 相同的值。",
+                "还没有配置同步令牌，请填写与远端服务 SYNC_TOKEN 相同的值。",
                 success=False,
                 details=[("检查项", "SYNC_TOKEN"), ("状态", "未配置")],
                 copy_text="SYNC_TOKEN 未配置",
             )
             return
+        if getattr(self, "_cloud_test_thread", None) is not None:
+            return
 
-        started = time.perf_counter()
-        response = None
-        try:
-            import httpx
+        self._set_cloud_test_busy(True)
+        thread = QThread(self)
+        worker = CloudConnectionTestWorker(endpoint, token)
+        worker.moveToThread(thread)
+        self._cloud_test_url = url
+        self._cloud_test_endpoint = endpoint
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._handle_cloud_test_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_cloud_test_thread)
+        self._cloud_test_thread = thread
+        self._cloud_test_worker = worker
+        thread.start()
 
-            response = httpx.get(
-                endpoint,
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=8.0,
-            )
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            response.raise_for_status()
-            payload = response.json()
+    def _clear_cloud_test_thread(self) -> None:
+        self._cloud_test_thread = None
+        self._cloud_test_worker = None
+
+    def _handle_cloud_test_finished(self, result: dict) -> None:
+        self._finish_cloud_test(
+            result,
+            getattr(self, "_cloud_test_url", ""),
+            getattr(self, "_cloud_test_endpoint", ""),
+        )
+
+    def _finish_cloud_test(self, result: dict, url: str, endpoint: str) -> None:
+        self._set_cloud_test_busy(False)
+        self.cloud_test_status.setVisible(True)
+        self.cloud_test_progress.setVisible(False)
+
+        if result.get("ok"):
+            payload = result.get("payload") or {}
             note_count = len(payload.get("notes", []))
             tombstone_count = len(payload.get("tombstones", []))
-
             self.cloud_summary.value_label.setText("连接正常")
             self.cloud_summary.value_label.setStyleSheet("color: #12815F;")
+            self.cloud_test_status.setText("✓ 连接测试通过")
+            self.cloud_test_status.setStyleSheet("color:#12815F;font-weight:700;")
             details = [
                 ("服务地址", url),
-                ("HTTP 状态", str(response.status_code)),
-                ("响应耗时", f"{elapsed_ms} ms"),
+                ("HTTP 状态", str(result.get("status_code") or "-")),
+                ("响应耗时", f"{result.get('elapsed_ms', 0)} ms"),
                 ("Token 验证", "已通过"),
                 ("云端知识文件", str(note_count)),
                 ("删除标记", str(tombstone_count)),
@@ -1359,36 +1463,38 @@ class AgentWindow(QMainWindow):
                 details=details,
                 copy_text=copy_text,
             )
-        except Exception as exc:
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            self.cloud_summary.value_label.setText("连接失败")
-            self.cloud_summary.value_label.setStyleSheet("color: #C43E56;")
-            http_status = getattr(response, "status_code", None)
-            message = (
-                "SYNC_TOKEN 验证失败，请确认本地令牌与 Worker 的 SYNC_TOKEN 完全一致。"
-                if http_status == 401
-                else "未能通过双向同步接口检查，请检查地址、网络或云端服务状态。"
-            )
-            details = [
-                ("服务地址", url),
-                ("测试接口", endpoint),
-                ("HTTP 状态", str(http_status or "-")),
-                ("耗时", f"{elapsed_ms} ms"),
-                ("错误类型", type(exc).__name__),
-                ("错误原因", str(exc)),
-            ]
-            copy_text = "\n".join(
-                ["NexusMind Cloud 连接测试失败", *[
-                    f"{key}: {value}" for key, value in details
-                ]]
-            )
-            self._show_cloud_dialog(
-                "Cloud API 连接测试",
-                message,
-                success=False,
-                details=details,
-                copy_text=copy_text,
-            )
+            return
+
+        self.cloud_summary.value_label.setText("连接失败")
+        self.cloud_summary.value_label.setStyleSheet("color: #C43E56;")
+        self.cloud_test_status.setText("✕ 连接测试失败")
+        self.cloud_test_status.setStyleSheet("color:#C43E56;font-weight:700;")
+        http_status = result.get("status_code")
+        message = (
+            "SYNC_TOKEN 验证失败，请确认本地令牌与远端服务的 SYNC_TOKEN 完全一致。"
+            if http_status == 401
+            else "未能通过双向同步接口检查，请检查地址、网络或远端服务状态。"
+        )
+        details = [
+            ("服务地址", url),
+            ("测试接口", endpoint),
+            ("HTTP 状态", str(http_status or "-")),
+            ("耗时", f"{result.get('elapsed_ms', 0)} ms"),
+            ("错误类型", str(result.get("error_type") or "-")),
+            ("错误原因", str(result.get("error") or "-")),
+        ]
+        copy_text = "\n".join(
+            ["NexusMind Cloud 连接测试失败", *[
+                f"{key}: {value}" for key, value in details
+            ]]
+        )
+        self._show_cloud_dialog(
+            "Cloud API 连接测试",
+            message,
+            success=False,
+            details=details,
+            copy_text=copy_text,
+        )
 
     def _render_status(self, status: AgentStatus) -> None:
         running = status.state == "running"

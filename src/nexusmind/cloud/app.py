@@ -264,16 +264,20 @@ async def vault_search(req: SearchRequest, request: Request):
         ORDER BY updated_at DESC LIMIT ?
         """
     ).bind(folder_pattern, pattern, pattern, min(max(req.limit, 1), 100)))
+    matches = [{
+        "path": row["path"],
+        "title": _frontmatter(str(row["content"])).get(
+            "title", PurePosixPath(str(row["path"])).stem
+        ),
+        "snippet": str(row["content"])[:320],
+        "version": row["version"],
+    } for row in rows]
     return {
+        "query": req.query,
+        "folder": req.folder,
         "total": len(rows),
-        "results": [{
-            "path": row["path"],
-            "title": _frontmatter(str(row["content"])).get(
-                "title", PurePosixPath(str(row["path"])).stem
-            ),
-            "snippet": str(row["content"])[:320],
-            "version": row["version"],
-        } for row in rows],
+        "matches": matches,
+        "results": matches,
     }
 
 
