@@ -5,17 +5,12 @@ import hashlib
 import hmac
 import json
 import os
-import smtplib
 import time
 import urllib.parse
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import httpx
-
 from nexusmind.config import NOTIFICATION_CONFIG_PATH
 
 VALID_CHANNEL_TYPES = {"feishu", "dingtalk", "email", "webhook"}
@@ -155,6 +150,47 @@ def _gen_dingtalk_url(url: str, secret: str) -> str:
     return f"{url}{connector}timestamp={timestamp}&sign={sign}"
 
 
+def _http_post_json(
+    url: str,
+    payload: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
+    timeout: float = 10.0,
+) -> tuple[int, Dict[str, Any], str]:
+    hdrs = dict(headers or {})
+    hdrs.setdefault("Content-Type", "application/json")
+    hdrs.setdefault("User-Agent", "NexusMind/0.3 (+notification-push)")
+    try:
+        import httpx
+        res = httpx.post(url, json=payload, headers=hdrs, timeout=timeout)
+        content_type = res.headers.get("content-type", "")
+        res_data = res.json() if content_type.startswith("application/json") else {}
+        return res.status_code, res_data, res.text
+    except ModuleNotFoundError:
+        import urllib.error
+        import urllib.request
+        data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=data_bytes, headers=hdrs, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status_code = resp.status
+                body_bytes = resp.read()
+                body_text = body_bytes.decode("utf-8", errors="replace")
+                try:
+                    res_data = json.loads(body_text)
+                except Exception:
+                    res_data = {}
+                return status_code, res_data, body_text
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            try:
+                res_data = json.loads(body_text)
+            except Exception:
+                res_data = {}
+            return exc.code, res_data, body_text
+        except Exception as exc:
+            return 500, {}, str(exc)
+
+
 def _send_feishu(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:
     url = channel["url"]
     secret = channel.get("secret")
@@ -181,12 +217,11 @@ def _send_feishu(channel: Dict[str, Any], title: str, content: str) -> Dict[str,
         payload["timestamp"] = str(timestamp)
         payload["sign"] = _gen_feishu_signature(secret, timestamp)
 
-    res = httpx.post(url, json=payload, timeout=10.0)
-    res_data = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
-    if res.status_code == 200 and res_data.get("code", 0) == 0:
+    status_code, res_data, res_text = _http_post_json(url, payload, timeout=10.0)
+    if status_code == 200 and res_data.get("code", 0) == 0:
         return {"status": "success", "channel_id": channel["id"], "type": "feishu", "response": res_data}
     else:
-        err_msg = res_data.get("msg") or res.text or f"HTTP {res.status_code}"
+        err_msg = res_data.get("msg") or res_text or f"HTTP {status_code}"
         return {"status": "error", "channel_id": channel["id"], "type": "feishu", "error": err_msg}
 
 
@@ -204,12 +239,11 @@ def _send_dingtalk(channel: Dict[str, Any], title: str, content: str) -> Dict[st
         },
     }
 
-    res = httpx.post(url, json=payload, timeout=10.0)
-    res_data = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
-    if res.status_code == 200 and res_data.get("errcode", 0) == 0:
+    status_code, res_data, res_text = _http_post_json(url, payload, timeout=10.0)
+    if status_code == 200 and res_data.get("errcode", 0) == 0:
         return {"status": "success", "channel_id": channel["id"], "type": "dingtalk", "response": res_data}
     else:
-        err_msg = res_data.get("errmsg") or res.text or f"HTTP {res.status_code}"
+        err_msg = res_data.get("errmsg") or res_text or f"HTTP {status_code}"
         return {"status": "error", "channel_id": channel["id"], "type": "dingtalk", "error": err_msg}
 
 
@@ -222,7 +256,6 @@ def _send_webhook(
 ) -> Dict[str, Any]:
     url = channel["url"]
     headers = channel.get("headers") or {}
-    headers.setdefault("Content-Type", "application/json")
 
     payload = {
         "event": event_type,
@@ -232,14 +265,16 @@ def _send_webhook(
         "timestamp": datetime.now().isoformat(),
     }
 
-    res = httpx.post(url, json=payload, headers=headers, timeout=10.0)
-    if 200 <= res.status_code < 300:
-        return {"status": "success", "channel_id": channel["id"], "type": "webhook", "http_code": res.status_code}
+    status_code, res_data, res_text = _http_post_json(url, payload, headers=headers, timeout=10.0)
+    if 200 <= status_code < 300:
+        return {"status": "success", "channel_id": channel["id"], "type": "webhook", "http_code": status_code}
     else:
-        return {"status": "error", "channel_id": channel["id"], "type": "webhook", "error": f"HTTP {res.status_code}: {res.text[:200]}"}
+        return {"status": "error", "channel_id": channel["id"], "type": "webhook", "error": f"HTTP {status_code}: {res_text[:200]}"}
 
 
 def _send_email(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:
+    import smtplib
+
     smtp_host = channel["smtp_host"]
     smtp_port = channel.get("smtp_port", 465)
     smtp_user = channel.get("smtp_user", "")
@@ -327,8 +362,9 @@ def send_notification(
     event_type: str = "general",
     metadata: Optional[Dict[str, Any]] = None,
     config_path: Optional[Path] = None,
+    config_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    config = load_notification_config(config_path)
+    config = config_data if config_data is not None else load_notification_config(config_path)
     all_channels = config.get("channels", [])
     enabled_channels = [c for c in all_channels if c.get("enabled", True)]
 

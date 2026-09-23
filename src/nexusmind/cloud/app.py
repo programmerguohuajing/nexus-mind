@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import re
 from datetime import date, datetime, timedelta
 from pathlib import PurePosixPath
@@ -13,6 +14,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from nexusmind import __version__
+from nexusmind.core.notification import (
+    sanitize_channel_config,
+    send_notification,
+    test_notification_channel,
+)
 from nexusmind.core.web_ingest import extract_web_page
 
 app = FastAPI(title="NexusMind Cloud", version=__version__)
@@ -54,6 +60,37 @@ class ReviewRequest(BaseModel):
     end_date: str | None = None
     week: str | None = None
     author_scope: str = "current_user"
+    push_channels: list[str] | None = None
+
+
+class NotificationChannelModel(BaseModel):
+    id: str
+    name: str | None = None
+    type: str
+    enabled: bool = True
+    url: str | None = None
+    secret: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = 465
+    smtp_user: str | None = None
+    smtp_pass: str | None = None
+    use_tls: bool | None = True
+    sender: str | None = None
+    recipients: list[str] = Field(default_factory=list)
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class NotificationConfigRequest(BaseModel):
+    default_channel_id: str | None = None
+    channels: list[NotificationChannelModel] = Field(default_factory=list)
+
+
+class NotificationPushRequest(BaseModel):
+    title: str
+    content: str
+    channels: list[str] | None = None
+    event_type: str = "general"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GitUser(BaseModel):
@@ -910,6 +947,124 @@ tags:
         "succeeded": succeeded, "failed": len(results) - succeeded,
         "results": results,
     }
+
+
+@app.get("/api/notifications/channels")
+async def cloud_get_notification_channels(request: Request):
+    env = _env(request)
+    note = await _note(env, "00-Meta/notification-config.json")
+    if not note or not note.get("content"):
+        return {"default_channel_id": None, "channels": []}
+    try:
+        data = json.loads(note["content"])
+        channels = data.get("channels", [])
+        sanitized = [sanitize_channel_config(c) for c in channels]
+        return {
+            "default_channel_id": data.get("default_channel_id"),
+            "channels": sanitized,
+        }
+    except Exception:
+        return {"default_channel_id": None, "channels": []}
+
+
+@app.post("/api/notifications/channels")
+async def cloud_update_notification_channels(req: NotificationConfigRequest, request: Request):
+    env = _env(request)
+    note = await _note(env, "00-Meta/notification-config.json")
+    existing_config = {}
+    if note and note.get("content"):
+        try:
+            existing_config = json.loads(note["content"])
+        except Exception:
+            pass
+
+    channels_data = [ch.model_dump(exclude_unset=True) for ch in req.channels]
+    existing_map = {c.get("id"): c for c in existing_config.get("channels", []) if c.get("id")}
+
+    normalized = []
+    seen_ids = set()
+    for item in channels_data:
+        cid = str(item.get("id") or "").strip()
+        ctype = str(item.get("type") or "").strip().lower()
+        cname = str(item.get("name") or cid or ctype).strip()
+        if not cid:
+            raise HTTPException(status_code=400, detail="Channel ID cannot be empty")
+        if cid in seen_ids:
+            raise HTTPException(status_code=400, detail=f"Duplicate channel ID: {cid}")
+        seen_ids.add(cid)
+        old = existing_map.get(cid, {})
+        secret = str(item.get("secret") or "").strip()
+        if secret == "******":
+            secret = str(old.get("secret") or "")
+        smtp_pass = str(item.get("smtp_pass") or "").strip()
+        if smtp_pass == "******":
+            smtp_pass = str(old.get("smtp_pass") or "")
+
+        entry = {
+            "id": cid,
+            "name": cname,
+            "type": ctype,
+            "enabled": bool(item.get("enabled", True)),
+        }
+        if ctype in ("feishu", "dingtalk", "webhook"):
+            url = str(item.get("url") or "").strip()
+            if not url:
+                raise HTTPException(status_code=400, detail=f"Webhook URL is required for channel '{cname}'")
+            entry["url"] = url
+            if secret:
+                entry["secret"] = secret
+        if ctype == "webhook" and isinstance(item.get("headers"), dict):
+            entry["headers"] = item["headers"]
+        if ctype == "email":
+            smtp_host = str(item.get("smtp_host") or "").strip()
+            if not smtp_host:
+                raise HTTPException(status_code=400, detail=f"SMTP host is required for email channel '{cname}'")
+            entry["smtp_host"] = smtp_host
+            entry["smtp_port"] = int(item.get("smtp_port") or 465)
+            entry["smtp_user"] = str(item.get("smtp_user") or "").strip()
+            entry["smtp_pass"] = smtp_pass
+            entry["use_tls"] = bool(item.get("use_tls", True))
+            entry["sender"] = str(item.get("sender") or entry["smtp_user"]).strip()
+            recipients = item.get("recipients", [])
+            if isinstance(recipients, str):
+                recipients = [r.strip() for r in recipients.split(",") if r.strip()]
+            entry["recipients"] = [str(r).strip() for r in recipients if str(r).strip()]
+        normalized.append(entry)
+
+    def_id = req.default_channel_id or (normalized[0]["id"] if normalized else None)
+    payload = {"default_channel_id": def_id, "channels": normalized}
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    await _upsert_note(env, "00-Meta/notification-config.json", content)
+    sanitized = [sanitize_channel_config(c) for c in normalized]
+    return {"status": "success", "default_channel_id": def_id, "channels": sanitized}
+
+
+@app.post("/api/notifications/test")
+async def cloud_test_notification_channel(channel: NotificationChannelModel):
+    try:
+        return test_notification_channel(channel.model_dump(exclude_unset=True))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/notifications/push")
+async def cloud_push_notification(req: NotificationPushRequest, request: Request):
+    env = _env(request)
+    note = await _note(env, "00-Meta/notification-config.json")
+    config = {}
+    if note and note.get("content"):
+        try:
+            config = json.loads(note["content"])
+        except Exception:
+            pass
+    return send_notification(
+        title=req.title,
+        content=req.content,
+        channel_ids=req.channels,
+        event_type=req.event_type,
+        metadata=req.metadata,
+        config_data=config,
+    )
 
 
 @app.get("/")
