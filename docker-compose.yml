@@ -1,6 +1,7 @@
 services:
   nexusmind:
     build: .
+    image: jingguohua102/nexus-mind:latest
     container_name: nexusmind
     ports:
       - "8301:8301"
