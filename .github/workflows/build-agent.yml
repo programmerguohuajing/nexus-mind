@@ -99,8 +99,9 @@ jobs:
             sleep 0.5
           done
           python -c 'import json,sys; d=json.load(open("/tmp/nexusmind-health.json")); expected=sys.argv[1]; assert d["version"] == expected, (d["version"], expected)' "$expected"
-          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'webTab'
-          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'submitWebIngest'
+          curl -fsS http://127.0.0.1:18301/app.js > /tmp/nexusmind-app.js
+          grep -q 'webTab' /tmp/nexusmind-app.js
+          grep -q 'submitWebIngest' /tmp/nexusmind-app.js
           curl -fsS http://127.0.0.1:18301/ui.js > /dev/null
 
       - name: Verify packaged runtime on macOS
@@ -119,8 +120,9 @@ jobs:
             sleep 0.5
           done
           python -c 'import json,sys; d=json.load(open("/tmp/nexusmind-health.json")); expected=sys.argv[1]; assert d["version"] == expected, (d["version"], expected)' "$expected"
-          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'webTab'
-          curl -fsS http://127.0.0.1:18301/app.js | grep -q 'submitWebIngest'
+          curl -fsS http://127.0.0.1:18301/app.js > /tmp/nexusmind-app.js
+          grep -q 'webTab' /tmp/nexusmind-app.js
+          grep -q 'submitWebIngest' /tmp/nexusmind-app.js
           curl -fsS http://127.0.0.1:18301/ui.js > /dev/null
 
       - name: Prepare Windows executable
