@@ -250,7 +250,7 @@ jobs:
           test -f NexusMindAgent-macOS-AppleSilicon-arm64.dmg
           ls -lh
 
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -261,14 +261,13 @@ jobs:
           TITLE="NexusMind ${TAG#v}"
           NOTES=$'NexusMind '"${TAG#v}"$'\n\nAgent downloads:\n- Windows x64: NexusMindAgent-Windows-x64.exe\n- Linux x64: NexusMindAgent-Linux-x64\n- macOS Intel x64 (macOS 12 Monterey+): NexusMindAgent-macOS-Intel-x64.dmg\n- macOS Apple Silicon (M-series) arm64 (macOS 12 Monterey+): NexusMindAgent-macOS-AppleSilicon-arm64.dmg\n\nDocker image (amd64 + arm64):\n```bash\ndocker pull ghcr.io/'"${GH_REPO}"':'"${TAG}"$'\n```\n\nAlso published as `ghcr.io/'"${GH_REPO}"':'"${TAG#v}"$'` and `ghcr.io/'"${GH_REPO}"':latest` for stable releases.'
 
+          cd release-assets
           if gh release view "$TAG" >/dev/null 2>&1; then
-            while IFS= read -r asset; do
-              [ -n "$asset" ] && gh release delete-asset "$TAG" "$asset" --yes
-            done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
-            gh release upload "$TAG" release-assets/*
+            gh release edit "$TAG" --title "$TITLE" --notes "$NOTES"
+            gh release upload "$TAG" * --clobber
           else
             gh release create "$TAG" \
-              release-assets/* \
+              * \
               --title "$TITLE" \
               --notes "$NOTES" \
               --verify-tag
