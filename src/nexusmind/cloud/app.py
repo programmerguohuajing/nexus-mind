@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 
 from nexusmind import __version__
 from nexusmind.core.notification import (
+    async_send_notification,
+    async_test_notification_channel,
     sanitize_channel_config,
     send_notification,
     test_notification_channel,
@@ -1094,7 +1096,7 @@ async def cloud_test_notification_channel(channel: NotificationChannelModel, req
                                     channel_data[k] = existing.get(k)
                 except Exception:
                     pass
-        return test_notification_channel(channel_data)
+        return await async_test_notification_channel(channel_data)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1109,7 +1111,7 @@ async def cloud_push_notification(req: NotificationPushRequest, request: Request
             config = json.loads(note["content"])
         except Exception:
             pass
-    return send_notification(
+    return await async_send_notification(
         title=req.title,
         content=req.content,
         channel_ids=req.channels,

@@ -188,6 +188,60 @@ def _gen_dingtalk_url(url: str, secret: str) -> str:
     return f"{url}{connector}timestamp={timestamp}&sign={sign}"
 
 
+async def _async_http_post_json(
+    url: str,
+    payload: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
+    timeout: float = 10.0,
+) -> tuple[int, Dict[str, Any], str]:
+    hdrs = dict(headers or {})
+    hdrs.setdefault("Content-Type", "application/json; charset=utf-8")
+    hdrs.setdefault("Accept", "application/json")
+    hdrs.setdefault("User-Agent", "NexusMind/0.3 (+notification-push)")
+
+    # 1. Cloudflare Workers (Pyodide) native JS fetch
+    try:
+        from js import fetch as js_fetch, Object
+        from pyodide.ffi import to_js
+
+        body_str = json.dumps(payload, ensure_ascii=False)
+        init = to_js({
+            "method": "POST",
+            "headers": hdrs,
+            "body": body_str,
+        }, dict_converter=Object.fromEntries)
+
+        resp = await js_fetch(url, init)
+        status = int(resp.status)
+        text = str(await resp.text())
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = {}
+        return status, data, text
+    except (ImportError, ModuleNotFoundError):
+        pass
+    except Exception as exc:
+        return 500, {}, str(exc)
+
+    # 2. Local Python async httpx
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            res = await client.post(url, json=payload, headers=hdrs)
+            content_type = res.headers.get("content-type", "")
+            res_data = res.json() if "application/json" in content_type else {}
+            return res.status_code, res_data, res.text
+    except ModuleNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    # 3. Synchronous urllib fallback in thread
+    import asyncio
+    return await asyncio.to_thread(_http_post_json, url, payload, headers, timeout)
+
+
 def _http_post_json(
     url: str,
     payload: Dict[str, Any],
@@ -443,6 +497,168 @@ pre {{ background: #f1f5f9; padding: 12px; border-radius: 6px; overflow-x: auto;
 
 def test_notification_channel(channel_config: Dict[str, Any]) -> Dict[str, Any]:
     channel_type = str(channel_config.get("type") or "").strip().lower()
+async def _async_send_feishu(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:
+    lines = [line for line in content.splitlines() if line.strip()]
+    content_paragraphs = []
+    for line in lines[:30]:  # Limit lines for card
+        content_paragraphs.append([{"tag": "text", "text": line}])
+
+    is_app_mode = (
+        channel.get("feishu_mode") == "app"
+        or bool(channel.get("app_id"))
+        or bool(channel.get("receive_id"))
+    )
+
+    if is_app_mode:
+        app_id = str(channel.get("app_id") or "").strip()
+        app_secret = str(channel.get("app_secret") or "").strip()
+        receive_id = str(channel.get("receive_id") or "").strip()
+        receive_id_type = str(channel.get("receive_id_type") or "open_id").strip() or "open_id"
+
+        # Auto-infer receive_id_type if not explicitly set to a custom one
+        if receive_id_type == "open_id":
+            if receive_id.startswith("oc_"):
+                receive_id_type = "chat_id"
+            elif "@" in receive_id:
+                receive_id_type = "email"
+
+        token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        token_payload = {
+            "app_id": app_id,
+            "app_secret": app_secret,
+        }
+        status_code, res_data, res_text = await _async_http_post_json(token_url, token_payload, timeout=10.0)
+        if status_code != 200 or res_data.get("code", -1) != 0:
+            err_msg = res_data.get("msg") or res_text or f"HTTP {status_code}"
+            return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": f"Feishu auth failed: {err_msg}"}
+
+        tenant_token = res_data.get("tenant_access_token")
+        if not tenant_token:
+            return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": "Feishu auth returned no tenant_access_token"}
+
+        send_url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
+        post_obj = {
+            "zh_cn": {
+                "title": f"📢 {title}",
+                "content": content_paragraphs,
+            }
+        }
+        send_payload = {
+            "receive_id": receive_id,
+            "msg_type": "post",
+            "content": json.dumps(post_obj, ensure_ascii=False),
+        }
+        send_headers = {"Authorization": f"Bearer {tenant_token}"}
+        send_status, send_data, send_text = await _async_http_post_json(send_url, send_payload, headers=send_headers, timeout=10.0)
+        if send_status == 200 and send_data.get("code", -1) == 0:
+            return {"status": "success", "channel_id": channel.get("id"), "type": "feishu", "response": send_data}
+        else:
+            err_msg = send_data.get("msg") or send_text or f"HTTP {send_status}"
+            return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": f"Feishu send failed: {err_msg}"}
+
+    # Webhook mode
+    url = channel.get("url", "")
+    secret = channel.get("secret")
+    timestamp = int(time.time())
+
+    payload: Dict[str, Any] = {
+        "msg_type": "post",
+        "content": {
+            "post": {
+                "zh_cn": {
+                    "title": f"📢 {title}",
+                    "content": content_paragraphs,
+                }
+            }
+        },
+    }
+
+    if secret:
+        payload["timestamp"] = str(timestamp)
+        payload["sign"] = _gen_feishu_signature(secret, timestamp)
+
+    status_code, res_data, res_text = await _async_http_post_json(url, payload, timeout=10.0)
+    if status_code == 200 and res_data.get("code", 0) == 0:
+        return {"status": "success", "channel_id": channel.get("id"), "type": "feishu", "response": res_data}
+    else:
+        err_msg = res_data.get("msg") or res_text or f"HTTP {status_code}"
+        return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": err_msg}
+
+
+async def _async_send_dingtalk(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:
+    raw_url = channel["url"]
+    secret = channel.get("secret", "")
+    url = _gen_dingtalk_url(raw_url, secret)
+
+    markdown_text = f"### 📢 {title}\n\n{content}"
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": title,
+            "text": markdown_text,
+        },
+    }
+
+    status_code, res_data, res_text = await _async_http_post_json(url, payload, timeout=10.0)
+    if status_code == 200 and res_data.get("errcode", 0) == 0:
+        return {"status": "success", "channel_id": channel["id"], "type": "dingtalk", "response": res_data}
+    else:
+        err_msg = res_data.get("errmsg") or res_text or f"HTTP {status_code}"
+        return {"status": "error", "channel_id": channel["id"], "type": "dingtalk", "error": err_msg}
+
+
+async def _async_send_webhook(
+    channel: Dict[str, Any],
+    title: str,
+    content: str,
+    event_type: str,
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    url = channel["url"]
+    headers = channel.get("headers") or {}
+
+    payload = {
+        "event": event_type,
+        "title": title,
+        "content": content,
+        "metadata": metadata or {},
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    status_code, res_data, res_text = await _async_http_post_json(url, payload, headers=headers, timeout=10.0)
+    if 200 <= status_code < 300:
+        return {"status": "success", "channel_id": channel["id"], "type": "webhook", "http_code": status_code}
+    else:
+        return {"status": "error", "channel_id": channel["id"], "type": "webhook", "error": f"HTTP {status_code}: {res_text[:200]}"}
+
+
+async def async_test_notification_channel(channel_config: Dict[str, Any]) -> Dict[str, Any]:
+    channel_type = str(channel_config.get("type") or "").strip().lower()
+    test_title = f"NexusMind 通道测试: {channel_config.get('name', '未命名通道')}"
+    test_content = (
+        f"这是一条来自 NexusMind 的通道连通性测试消息。\n"
+        f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"通道类型: {channel_type}\n"
+        f"状态: 正常运行"
+    )
+
+    if channel_type == "feishu":
+        return await _async_send_feishu(channel_config, test_title, test_content)
+    elif channel_type == "dingtalk":
+        return await _async_send_dingtalk(channel_config, test_title, test_content)
+    elif channel_type == "webhook":
+        return await _async_send_webhook(channel_config, test_title, test_content, "test", {"test": True})
+    elif channel_type == "email":
+        return _send_email(channel_config, test_title, test_content)
+    else:
+        return {"status": "error", "error": f"Unsupported channel type: {channel_type}"}
+
+
+async_test_notification_channel.__test__ = False
+
+
+def test_notification_channel(channel_config: Dict[str, Any]) -> Dict[str, Any]:
+    channel_type = str(channel_config.get("type") or "").strip().lower()
     test_title = f"NexusMind 通道测试: {channel_config.get('name', '未命名通道')}"
     test_content = (
         f"这是一条来自 NexusMind 的通道连通性测试消息。\n"
@@ -464,6 +680,82 @@ def test_notification_channel(channel_config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 test_notification_channel.__test__ = False
+
+
+async def async_send_notification(
+    title: str,
+    content: str,
+    channel_ids: Optional[List[str]] = None,
+    event_type: str = "general",
+    metadata: Optional[Dict[str, Any]] = None,
+    config_path: Optional[Path] = None,
+    config_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    config = config_data if config_data is not None else load_notification_config(config_path)
+    all_channels = config.get("channels", [])
+    enabled_channels = [c for c in all_channels if c.get("enabled", True)]
+
+    if not enabled_channels:
+        return {
+            "status": "warning",
+            "message": "No enabled notification channels found",
+            "sent_count": 0,
+            "failed_count": 0,
+            "results": [],
+        }
+
+    target_channels: List[Dict[str, Any]] = []
+
+    if channel_ids and "all" in [c.lower() for c in channel_ids]:
+        target_channels = enabled_channels
+    elif channel_ids:
+        lowered_targets = set(c.lower() for c in channel_ids)
+        for c in enabled_channels:
+            cid = c.get("id", "").lower()
+            ctype = c.get("type", "").lower()
+            if cid in lowered_targets or ctype in lowered_targets:
+                target_channels.append(c)
+    else:
+        default_id = config.get("default_channel_id")
+        if default_id:
+            target_channels = [c for c in enabled_channels if c.get("id") == default_id]
+        if not target_channels:
+            target_channels = enabled_channels[:1]
+
+    results = []
+    sent_count = 0
+    failed_count = 0
+
+    for ch in target_channels:
+        ch_type = ch.get("type")
+        res: Dict[str, Any]
+        try:
+            if ch_type == "feishu":
+                res = await _async_send_feishu(ch, title, content)
+            elif ch_type == "dingtalk":
+                res = await _async_send_dingtalk(ch, title, content)
+            elif ch_type == "webhook":
+                res = await _async_send_webhook(ch, title, content, event_type, metadata)
+            elif ch_type == "email":
+                res = _send_email(ch, title, content)
+            else:
+                res = {"status": "error", "channel_id": ch.get("id"), "type": ch_type, "error": "Unknown type"}
+        except Exception as exc:
+            res = {"status": "error", "channel_id": ch.get("id"), "type": ch_type, "error": str(exc)}
+
+        if res.get("status") == "success":
+            sent_count += 1
+        else:
+            failed_count += 1
+        results.append(res)
+
+    status = "success" if failed_count == 0 else ("partial_success" if sent_count > 0 else "error")
+    return {
+        "status": status,
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "results": results,
+    }
 
 
 def send_notification(
