@@ -745,7 +745,16 @@ def update_notification_channels(req: NotificationConfigRequest):
 @app.post("/api/notifications/test")
 def test_notification_channel_endpoint(channel: NotificationChannelModel):
     try:
-        res = test_notification_channel(channel.model_dump(exclude_unset=True))
+        channel_data = channel.model_dump(exclude_unset=True)
+        if channel_data.get("id"):
+            cfg = load_notification_config()
+            existing = next((c for c in cfg.get("channels", []) if c.get("id") == channel_data["id"]), None)
+            if existing:
+                for k in ("secret", "app_secret", "smtp_pass"):
+                    if channel_data.get(k) == "******" or not channel_data.get(k):
+                        if existing.get(k):
+                            channel_data[k] = existing.get(k)
+        res = test_notification_channel(channel_data)
         return res
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

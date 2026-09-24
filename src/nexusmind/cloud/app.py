@@ -1077,9 +1077,24 @@ async def cloud_update_notification_channels(req: NotificationConfigRequest, req
 
 
 @app.post("/api/notifications/test")
-async def cloud_test_notification_channel(channel: NotificationChannelModel):
+async def cloud_test_notification_channel(channel: NotificationChannelModel, request: Request):
     try:
-        return test_notification_channel(channel.model_dump(exclude_unset=True))
+        channel_data = channel.model_dump(exclude_unset=True)
+        if channel_data.get("id"):
+            env = _env(request)
+            note = await _note(env, "00-Meta/notification-config.json")
+            if note and note.get("content"):
+                try:
+                    cfg = json.loads(note["content"])
+                    existing = next((c for c in cfg.get("channels", []) if c.get("id") == channel_data["id"]), None)
+                    if existing:
+                        for k in ("secret", "app_secret", "smtp_pass"):
+                            if channel_data.get(k) == "******" or not channel_data.get(k):
+                                if existing.get(k):
+                                    channel_data[k] = existing.get(k)
+                except Exception:
+                    pass
+        return test_notification_channel(channel_data)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

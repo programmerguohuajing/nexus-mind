@@ -193,17 +193,30 @@ def _http_post_json(
     payload: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
     timeout: float = 10.0,
+    retries: int = 2,
 ) -> tuple[int, Dict[str, Any], str]:
     hdrs = dict(headers or {})
-    hdrs.setdefault("Content-Type", "application/json")
+    hdrs.setdefault("Content-Type", "application/json; charset=utf-8")
+    hdrs.setdefault("Accept", "application/json")
     hdrs.setdefault("User-Agent", "NexusMind/0.3 (+notification-push)")
-    try:
-        import httpx
-        res = httpx.post(url, json=payload, headers=hdrs, timeout=timeout)
-        content_type = res.headers.get("content-type", "")
-        res_data = res.json() if content_type.startswith("application/json") else {}
-        return res.status_code, res_data, res.text
-    except ModuleNotFoundError:
+    hdrs.setdefault("Connection", "close")
+
+    last_err = ""
+    for attempt in range(max(1, retries + 1)):
+        try:
+            import httpx
+            try:
+                res = httpx.post(url, json=payload, headers=hdrs, timeout=timeout)
+                content_type = res.headers.get("content-type", "")
+                res_data = res.json() if "application/json" in content_type else {}
+                return res.status_code, res_data, res.text
+            except Exception as exc:
+                last_err = str(exc)
+                if attempt < retries:
+                    time.sleep(0.5)
+        except ModuleNotFoundError:
+            pass
+
         import urllib.error
         import urllib.request
         data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -226,7 +239,13 @@ def _http_post_json(
                 res_data = {}
             return exc.code, res_data, body_text
         except Exception as exc:
-            return 500, {}, str(exc)
+            last_err = str(exc)
+            if attempt < retries:
+                time.sleep(0.5)
+                continue
+            return 500, {}, last_err or "Connection failed"
+
+    return 500, {}, last_err or "Unknown HTTP error"
 
 
 def _send_feishu(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:
