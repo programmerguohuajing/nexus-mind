@@ -664,7 +664,8 @@ def _cloud_review_synthesis(commits: list[dict[str, Any]], tags: list[dict[str, 
 @app.post("/mcp/vault_weekly_review")
 async def weekly_review(req: ReviewRequest, request: Request):
     env = _env(request)
-    week, start, end = _week_bounds(req.week)
+    target_period = req.period_value or req.week
+    week, start, end = _week_bounds(target_period)
     if req.author_scope not in {"current_user", "all_users"}:
         raise HTTPException(status_code=400, detail="author_scope must be current_user or all_users")
 
@@ -755,14 +756,50 @@ tags:
 """
     path = f"90-AI-Workspace/reviews/{week}-Weekly-Review.md"
     await _upsert_note(env, path, content)
+
+    notification_result = None
+    if req.push_channels:
+        note_cfg = await _note(env, "00-Meta/notification-config.json")
+        cfg_data = {}
+        if note_cfg and note_cfg.get("content"):
+            try:
+                cfg_data = json.loads(note_cfg["content"])
+            except Exception:
+                pass
+        title = f"{week} 工作复盘报告"
+        summary_lines = [
+            f"【NexusMind {week} 工作复盘报告】",
+            f"- Git Commit: {len(commits)} 个",
+            f"- 活跃仓库: {len(repos)} 个",
+            f"- Release/Tag: {len(tags)} 个",
+            "",
+            "🎯 本周工作主线:",
+            workstream_text,
+            "",
+            "✅ 关键成果:",
+            outcome_text,
+            "",
+            f"查看完整复盘报告路径: {path}",
+        ]
+        summary_content = "\n".join(summary_lines)
+        notification_result = await async_send_notification(
+            title=title,
+            content=summary_content,
+            channel_ids=req.push_channels,
+            event_type="weekly_review",
+            metadata={"week": week, "path": path},
+            config_data=cfg_data,
+        )
+
     return {
-        "status": "success", "week": week, "path": path,
+        "status": "success", "week": week, "path": path, "period_value": week,
         "author_scope": req.author_scope, "author_scope_label": scope_label,
         "git_commits": len(commits), "git_tags": len(tags),
         "git_repositories": repos, "git_active_repositories": repos,
         "knowledge_topics": 0, "daily_logs_count": 0,
         "logged_tasks_count": 0, "total_hours": 0, "avg_focus": None,
         "completed_items": 0, "pending_items": 0, "compiled_items": 0,
+        "notification_result": notification_result,
     }
 
 
