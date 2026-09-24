@@ -210,11 +210,26 @@ class AgentSupervisor:
         self._api_process = None
         if not process or process.poll() is not None:
             return
-        process.terminate()
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            import psutil
+
+            parent = psutil.Process(process.pid)
+            for child in parent.children(recursive=True):
+                try:
+                    child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            parent.kill()
+            parent.wait(timeout=3)
+        except Exception:
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
 
 
     def _run_loop(self) -> None:

@@ -1589,9 +1589,29 @@ class AgentWindow(QMainWindow):
 
     def _quit(self) -> None:
         self._quitting = True
-        self.supervisor.stop()
-        self.tray.hide()
+        try:
+            self.supervisor.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_ipc_server") and self._ipc_server:
+                self._ipc_server.close()
+            QLocalServer.removeServer(INSTANCE_SERVER)
+        except Exception:
+            pass
+        try:
+            self.tray.hide()
+        except Exception:
+            pass
         QApplication.instance().quit()
+
+        import threading
+
+        def _force_exit() -> None:
+            time.sleep(0.8)
+            os._exit(0)
+
+        threading.Thread(target=_force_exit, daemon=True).start()
 
 
 INSTANCE_SERVER = "NexusMindAgent"
