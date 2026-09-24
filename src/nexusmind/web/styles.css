@@ -1233,4 +1233,95 @@ pre, .md-code { background: var(--code-bg); color: var(--code-text); border-colo
 @media (max-width: 760px) {
   .top-picker-button { min-width: 92px; }
   .top-picker-menu { min-width: 140px; }
-}`r`n
+}
+
+/* Knowledge Distillation & Sync in Review */
+.knowledge-distill-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.knowledge-distill-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.knowledge-distill-title {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.knowledge-candidate-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.knowledge-candidate-card:hover {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--line));
+}
+.knowledge-candidate-card.synced {
+  border-color: #2da44e;
+  background: color-mix(in srgb, #2da44e 5%, var(--surface));
+}
+.knowledge-candidate-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.knowledge-candidate-info {
+  flex: 1;
+  min-width: 0;
+}
+.knowledge-candidate-info h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.knowledge-target-path {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+.knowledge-summary {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #57606a;
+  line-height: 1.5;
+}
+.knowledge-preview-toggle {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--brand);
+  cursor: pointer;
+  user-select: none;
+}
+.knowledge-preview-toggle:hover {
+  text-decoration: underline;
+}
+.knowledge-preview-content {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f6f8fa;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  display: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+`r`n

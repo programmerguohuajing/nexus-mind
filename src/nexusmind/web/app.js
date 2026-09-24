@@ -1393,6 +1393,10 @@ async function runReview() {
       const status = result.notification_result.status;
       pushBadge = '<span class="badge ' + (status === "success" ? "ok" : "warn") + '">推送: ' + esc(status) + ' (' + result.notification_result.sent_count + ')</span>';
     }
+
+    state.currentReviewKnowledge = result.reusable_knowledge || [];
+    const knowledgeSectionHtml = renderKnowledgeCandidatesHTML(state.currentReviewKnowledge);
+
     resultEl.className = "review-report";
     resultEl.innerHTML = '<div class="result-head"><div><strong>' + esc(result.period_value ? result.period_value + " 复盘报告" : "复盘报告") + '</strong>'
       + '<div class="path">' + esc(result.path) + '</div></div><div class="actions">'
@@ -1401,12 +1405,116 @@ async function runReview() {
       + '<span class="badge">' + esc(t("review.activeRepos", { count: (result.git_active_repositories || []).length })) + '</span>'
       + '<span class="badge">' + esc(t("review.knowledgeTopics", { count: result.knowledge_topics || 0 })) + '</span>'
       + pushBadge + '</div></div>'
-      + '<article class="markdown-body review-markdown">' + renderMarkdown(note.content) + '</article>';
+      + '<article class="markdown-body review-markdown">' + renderMarkdown(note.content) + '</article>'
+      + knowledgeSectionHtml;
     bindWikiLinks(resultEl);
+    updateSelectedKnowledgeCount();
     toast(t("review.done"));
   } catch (e) {
     resultEl.className = "empty";
     resultEl.textContent = t("review.failed", { error: e.message });
+  }
+}
+
+function renderKnowledgeCandidatesHTML(candidates) {
+  if (!candidates || !candidates.length) return "";
+  const total = candidates.length;
+  const cardsHtml = candidates.map(function(c, idx) {
+    const isSynced = Boolean(c.synced);
+    const tagsHtml = (c.tags || []).map(t => '<span class="badge" style="font-size:10px;">' + esc(t) + '</span>').join(" ");
+    return '<div class="knowledge-candidate-card ' + (isSynced ? "synced" : "") + '" id="candCard-' + esc(c.id || idx) + '">'
+      + '<div class="knowledge-candidate-header">'
+      + '<input type="checkbox" class="knowledge-select-cb" data-id="' + esc(c.id || idx) + '" ' + (isSynced ? "disabled" : "checked") + ' onchange="updateSelectedKnowledgeCount()" />'
+      + '<div class="knowledge-candidate-info">'
+      + '<h4><span>' + esc(c.title) + '</span> <span class="badge ok" style="font-size:10px;">' + esc(c.domain || "Knowledge") + '</span> ' + (isSynced ? '<span class="badge ok" style="font-size:10px;">已同步</span>' : '') + '</h4>'
+      + '<div class="knowledge-target-path">目标路径: ' + esc(c.target_path || c.path) + '</div>'
+      + '<div class="knowledge-summary">' + esc(c.summary) + '</div>'
+      + '<div style="margin-top:6px;">' + tagsHtml + '</div>'
+      + '<a class="knowledge-preview-toggle" onclick="toggleKnowledgePreview(\'' + esc(c.id || idx) + '\')">展开/收起卡片预览 ▾</a>'
+      + '<div class="knowledge-preview-content" id="candPreview-' + esc(c.id || idx) + '">' + esc(c.content) + '</div>'
+      + '</div></div></div>';
+  }).join("");
+
+  return '<section class="knowledge-distill-section">'
+    + '<div class="knowledge-distill-head">'
+    + '<div class="knowledge-distill-title">💡 提炼的可复用知识 (' + total + ' 个)'
+    + '<span class="muted" style="font-size:12px;font-weight:normal;margin-left:8px;">可勾选后沉淀到知识库对应主题</span></div>'
+    + '<div class="actions" style="display:flex;align-items:center;gap:12px;">'
+    + '<label style="font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" id="selectAllKnowledgeCb" checked onchange="toggleAllKnowledgeCandidates(this.checked)" /> 全选</label>'
+    + '<button class="btn" id="syncKnowledgeBtn" onclick="syncSelectedKnowledge()">同步所选知识到知识库 (<span id="selectedKnowledgeCount">' + total + '</span>)</button>'
+    + '</div></div>'
+    + '<div id="knowledgeCandidatesList">' + cardsHtml + '</div>'
+    + '</section>';
+}
+
+function toggleKnowledgePreview(id) {
+  const el = document.getElementById("candPreview-" + id);
+  if (!el) return;
+  el.style.display = (el.style.display === "block") ? "none" : "block";
+}
+
+function toggleAllKnowledgeCandidates(checked) {
+  const checkboxes = document.querySelectorAll(".knowledge-select-cb:not(:disabled)");
+  checkboxes.forEach(cb => { cb.checked = checked; });
+  updateSelectedKnowledgeCount();
+}
+
+function updateSelectedKnowledgeCount() {
+  const checked = document.querySelectorAll(".knowledge-select-cb:checked:not(:disabled)");
+  const countEl = document.getElementById("selectedKnowledgeCount");
+  const btn = document.getElementById("syncKnowledgeBtn");
+  if (countEl) countEl.textContent = checked.length;
+  if (btn) btn.disabled = (checked.length === 0);
+}
+
+async function syncSelectedKnowledge() {
+  if (!state.currentReviewKnowledge || !state.currentReviewKnowledge.length) return;
+  const checkedBoxes = Array.from(document.querySelectorAll(".knowledge-select-cb:checked:not(:disabled)"));
+  if (!checkedBoxes.length) {
+    toast("请至少选择一项要同步的知识卡片");
+    return;
+  }
+  const selectedIds = new Set(checkedBoxes.map(cb => cb.getAttribute("data-id")));
+  const selectedItems = state.currentReviewKnowledge.filter((item, idx) => selectedIds.has(String(item.id || idx)));
+
+  const btn = document.getElementById("syncKnowledgeBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "正在同步中…";
+  }
+
+  try {
+    const res = await api("/api/review/sync-knowledge", {
+      method: "POST",
+      body: JSON.stringify({ items: selectedItems })
+    });
+    selectedItems.forEach(item => { item.synced = true; });
+    checkedBoxes.forEach(cb => {
+      cb.disabled = true;
+      cb.checked = false;
+      const card = cb.closest(".knowledge-candidate-card");
+      if (card) {
+        card.classList.add("synced");
+        const h4 = card.querySelector("h4");
+        if (h4 && !h4.querySelector(".badge.ok:last-child")?.textContent.includes("已同步")) {
+          const badge = document.createElement("span");
+          badge.className = "badge ok";
+          badge.style.fontSize = "10px";
+          badge.textContent = "已同步";
+          h4.appendChild(badge);
+        }
+      }
+    });
+    toast("成功同步 " + (res.synced_count || selectedItems.length) + " 个知识卡片到知识库");
+    updateSelectedKnowledgeCount();
+  } catch (e) {
+    toast("同步失败: " + e.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '同步所选知识到知识库 (<span id="selectedKnowledgeCount">0</span>)';
+      updateSelectedKnowledgeCount();
+    }
   }
 }
 

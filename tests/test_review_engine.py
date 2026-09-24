@@ -293,4 +293,90 @@ def test_generate_review_multi_granularity(tmp_path):
     assert d_result["daily_logs_count"] == 1
     assert d_result["total_hours"] == 2.0
     assert (tmp_path / d_result["path"]).exists()
+    assert "reusable_knowledge" in d_result
+
+
+def test_extract_and_sync_reusable_knowledge(tmp_path):
+    from nexusmind.core.review import extract_reusable_knowledge, sync_knowledge_cards
+
+    _seed(tmp_path)
+    data = {
+        "completed": ["完成飞书通知改造", "完成复盘引擎重构"],
+        "git_commit_items": [
+            {
+                "repository": "nexus-mind",
+                "hash": "1111111",
+                "type": "feat",
+                "scope": "notifications",
+                "title": "支持飞书自建应用与Webhook双通道推送",
+                "category": "功能交付",
+            },
+            {
+                "repository": "nexus-mind",
+                "hash": "2222222",
+                "type": "fix",
+                "scope": "notifications",
+                "title": "修复Cloudflare环境下的HTTP请求与凭证恢复",
+                "category": "问题修复",
+            },
+            {
+                "repository": "nexus-mind",
+                "hash": "3333333",
+                "type": "ci",
+                "scope": "build",
+                "title": "优化本地Win打包脚本与GitHub Actions",
+                "category": "CI / 发布工程",
+            },
+            {
+                "repository": "nexus-mind",
+                "hash": "4444444",
+                "type": "ci",
+                "scope": "build",
+                "title": "更新构建依赖与产物发布配置",
+                "category": "CI / 发布工程",
+            },
+        ],
+        "git_release_tags": [
+            {"repository": "nexus-mind", "tag": "v0.3.0"}
+        ],
+    }
+
+    candidates = extract_reusable_knowledge("2026-W38", data)
+    assert len(candidates) >= 3
+
+    # Architecture card
+    feat_card = next((c for c in candidates if c["domain"] == "Architecture"), None)
+    assert feat_card is not None
+    assert "Notifications" in feat_card["title"]
+    assert "40-Domain/Architecture" in feat_card["target_path"]
+    assert "支持飞书自建应用与Webhook双通道推送" in feat_card["content"]
+
+    # Troubleshooting card
+    fix_card = next((c for c in candidates if c["domain"] == "Troubleshooting"), None)
+    assert fix_card is not None
+    assert "40-Domain/Troubleshooting" in fix_card["target_path"]
+    assert "修复Cloudflare环境下的HTTP请求与凭证恢复" in fix_card["content"]
+
+    # Releases card
+    rel_card = next((c for c in candidates if c["domain"] == "Projects"), None)
+    assert rel_card is not None
+    assert "v0.3.0" in rel_card["content"]
+
+    # Sync selected knowledge cards
+    selected = [feat_card, fix_card]
+    sync_res = sync_knowledge_cards(selected, vault_root=tmp_path)
+    assert sync_res["status"] == "success"
+    assert sync_res["synced_count"] == 2
+
+    # Verify notes created
+    assert (tmp_path / feat_card["target_path"]).exists()
+    assert (tmp_path / fix_card["target_path"]).exists()
+    assert "Notifications 模块架构设计与实现实践" in (tmp_path / feat_card["target_path"]).read_text(encoding="utf-8")
+
+    # Verify compilation log updated
+    log_text = (tmp_path / "00-Meta/COMPILATION-LOG.md").read_text(encoding="utf-8")
+    assert "复盘知识同步" in log_text
+    assert feat_card["target_path"] in log_text
+    assert fix_card["target_path"] in log_text
+
 

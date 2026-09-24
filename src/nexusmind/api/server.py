@@ -37,7 +37,7 @@ from nexusmind.core.notification import (
 )
 from nexusmind.core.web_ingest import fetch_web_page
 from nexusmind.core.occ import get_file_hash
-from nexusmind.core.review import generate_review, generate_weekly_review
+from nexusmind.core.review import generate_review, generate_weekly_review, sync_knowledge_cards
 from nexusmind.core.search import search_notes
 from nexusmind.core.uploads import SUPPORTED_EXTENSIONS, ingest_uploaded_file
 from nexusmind.core.storage import (
@@ -111,6 +111,18 @@ class ReviewRequest(BaseModel):
     week: Optional[str] = None
     author_scope: str = "current_user"
     push_channels: Optional[List[str]] = None
+
+
+class KnowledgeItemModel(BaseModel):
+    title: Optional[str] = None
+    path: Optional[str] = None
+    target_path: Optional[str] = None
+    content: str
+    domain: Optional[str] = None
+
+
+class SyncKnowledgeRequest(BaseModel):
+    items: List[KnowledgeItemModel] = Field(default_factory=list)
 
 
 class NotificationChannelModel(BaseModel):
@@ -714,6 +726,16 @@ def vault_review_endpoint(req: ReviewRequest):
             push_channels=req.push_channels,
         )
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/review/sync-knowledge")
+@app.post("/mcp/vault_sync_knowledge")
+def sync_review_knowledge_endpoint(req: SyncKnowledgeRequest):
+    try:
+        items_data = [item.model_dump(exclude_unset=True) for item in req.items]
+        return sync_knowledge_cards(items_data, vault_root=VAULT_ROOT)
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

@@ -65,6 +65,18 @@ class ReviewRequest(BaseModel):
     push_channels: list[str] | None = None
 
 
+class KnowledgeItemModel(BaseModel):
+    title: str | None = None
+    path: str | None = None
+    target_path: str | None = None
+    content: str
+    domain: str | None = None
+
+
+class SyncKnowledgeRequest(BaseModel):
+    items: list[KnowledgeItemModel] = Field(default_factory=list)
+
+
 class NotificationChannelModel(BaseModel):
     id: str
     name: str | None = None
@@ -660,6 +672,254 @@ def _cloud_review_synthesis(commits: list[dict[str, Any]], tags: list[dict[str, 
     return {"lines": lines, "outcomes": outcomes, "categories": categories}
 
 
+def _clean_slug(text: str) -> str:
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", text).strip("-")
+    return cleaned or "knowledge-card"
+
+
+def _extract_cloud_reusable_knowledge(
+    period_label: str,
+    commits: list[dict[str, Any]],
+    tags: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    commit_items: list[dict[str, Any]] = []
+    for raw in commits:
+        item = dict(raw)
+        item.update(_review_commit_meta(str(raw["subject"])))
+        commit_items.append(item)
+
+    candidates: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    by_scope: dict[str, list[dict[str, Any]]] = {}
+    for c in commit_items:
+        scope = c.get("scope", "").strip() or c.get("repository", "").strip() or "core"
+        by_scope.setdefault(scope, []).append(c)
+
+    for scope, items in sorted(by_scope.items(), key=lambda p: -len(p[1])):
+        feats = [it for it in items if it.get("category") in {"功能交付", "架构重构", "性能优化"}]
+        fixes = [it for it in items if it.get("category") in {"问题修复", "安全加固"}]
+        cis = [it for it in items if it.get("category") in {"CI / 发布工程", "构建工程", "工程维护"}]
+
+        if feats:
+            titles = [f"- {it['title']}" for it in feats[:5]]
+            repos = sorted({it['repository'] for it in feats})
+            key = f"feat_{scope}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                card_title = f"{scope.capitalize()} 模块架构设计与实现实践"
+                domain = "Architecture"
+                file_slug = _clean_slug(f"{scope}-architecture-practice")
+                target_path = f"40-Domain/{domain}/{file_slug}.md"
+                summary = f"提炼 {scope} 模块新增功能与架构演进，涵盖 {', '.join(repos)} 等组件的核心设计与可复用经验。"
+                content = f"""---
+title: "{card_title}"
+domain: "{domain}"
+period: "{period_label}"
+tags:
+  - "#domain/architecture"
+  - "#knowledge-card"
+  - "#reusable-knowledge"
+---
+
+# {card_title}
+
+## 🎯 业务与技术背景
+在 {period_label} 周期内，系统针对 `{scope}` 模块进行了功能扩展与架构升级，主要覆盖仓库：{', '.join(repos)}。
+
+## 🏗️ 核心设计与实现要点
+{chr(10).join(titles)}
+
+## 💡 可复用实践与规范
+1. **模块解耦与接口抽象**：确保 `{scope}` 核心逻辑与调用方平台解耦，提供通用适配层。
+2. **状态与异常边界**：对外调用需具备完善的错误捕获与重试机制，保持幂等性。
+3. **可观测性与日志沉淀**：关键操作与外部交互记录审计链路，方便持续追踪。
+
+## 🔗 关联提交与上下文
+- 提炼自复盘周期：[[{period_label} 工作周报]]
+- 涉及仓库：{', '.join(repos)}
+"""
+                candidates.append({
+                    "id": f"cand-{len(candidates) + 1}",
+                    "title": card_title,
+                    "domain": domain,
+                    "target_path": target_path,
+                    "summary": summary,
+                    "tags": ["#domain/architecture", "#knowledge-card", "#reusable-knowledge"],
+                    "content": content,
+                    "source_count": len(feats),
+                    "synced": False,
+                })
+
+        if fixes:
+            titles = [f"- {it['title']}" for it in fixes[:5]]
+            repos = sorted({it['repository'] for it in fixes})
+            key = f"fix_{scope}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                card_title = f"{scope.capitalize()} 问题排查与防范复盘指南"
+                domain = "Troubleshooting"
+                file_slug = _clean_slug(f"{scope}-troubleshooting-guide")
+                target_path = f"40-Domain/{domain}/{file_slug}.md"
+                summary = f"归纳 {scope} 模块本周期排查与修复的 {len(fixes)} 个关键问题，总结排错经验与防御策略。"
+                content = f"""---
+title: "{card_title}"
+domain: "{domain}"
+period: "{period_label}"
+tags:
+  - "#domain/troubleshooting"
+  - "#knowledge-card"
+  - "#postmortem"
+---
+
+# {card_title}
+
+## ⚠️ 故障与问题背景
+本周期在 `{scope}` 模块处理了以下典型问题与 Bug：
+{chr(10).join(titles)}
+
+## 🔍 根因分析与排查经验
+- **环境差异与运行时限制**：跨环境部署（如 Local vs Cloud Worker / Serverless）时需关注底层网络与依赖库行为差异。
+- **配置与凭据一致性**：脱敏字段、掩码处理与多层数据透传时应严格保持原始凭证映射。
+
+## 🛡️ 防御措施与最佳实践
+1. **网络与协议兜底**：外部通信采用多级容错（原生 Fetch / 重试 / 超时兜底）。
+2. **自动化测试守门**：针对边界场景增加自动化 Mock 测试用例，防范回归。
+
+## 🔗 关联复盘
+- 提炼自复盘周期：[[{period_label} 工作周报]]
+"""
+                candidates.append({
+                    "id": f"cand-{len(candidates) + 1}",
+                    "title": card_title,
+                    "domain": domain,
+                    "target_path": target_path,
+                    "summary": summary,
+                    "tags": ["#domain/troubleshooting", "#knowledge-card", "#postmortem"],
+                    "content": content,
+                    "source_count": len(fixes),
+                    "synced": False,
+                })
+
+        if cis and len(cis) >= 2:
+            titles = [f"- {it['title']}" for it in cis[:5]]
+            repos = sorted({it['repository'] for it in cis})
+            key = f"ci_{scope}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                card_title = f"{scope.capitalize()} 工程化与构建规范"
+                domain = "BestPractices"
+                file_slug = _clean_slug(f"{scope}-engineering-standards")
+                target_path = f"40-Domain/{domain}/{file_slug}.md"
+                summary = f"提炼 {scope} 的工程配置、CI/CD 构建与依赖管理规范。"
+                content = f"""---
+title: "{card_title}"
+domain: "{domain}"
+period: "{period_label}"
+tags:
+  - "#domain/bestpractices"
+  - "#knowledge-card"
+  - "#engineering"
+---
+
+# {card_title}
+
+## 🛠️ 工程化改进项
+{chr(10).join(titles)}
+
+## 📋 沉淀的最佳实践
+1. **标准化提交信息**：遵循 `type(scope): 中文描述` Git Commit 规范。
+2. **构建与部署自动化**：保证本地编译与远端 CI 流程一致，避免单点环境偏差。
+"""
+                candidates.append({
+                    "id": f"cand-{len(candidates) + 1}",
+                    "title": card_title,
+                    "domain": domain,
+                    "target_path": target_path,
+                    "summary": summary,
+                    "tags": ["#domain/bestpractices", "#knowledge-card", "#engineering"],
+                    "content": content,
+                    "source_count": len(cis),
+                    "synced": False,
+                })
+
+    if tags:
+        rel_tags = [f"- **{it['repository']}** `{it['name']}`" for it in tags]
+        key = "releases_summary"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            card_title = f"{period_label} 版本交付与里程碑总结"
+            domain = "Projects"
+            file_slug = _clean_slug(f"{period_label}-release-milestones")
+            target_path = f"20-Projects/Releases/{file_slug}.md"
+            summary = f"记录 {period_label} 周期内发布的 {len(tags)} 个版本标签及主要交付节点。"
+            content = f"""---
+title: "{card_title}"
+domain: "{domain}"
+period: "{period_label}"
+tags:
+  - "#projects/releases"
+  - "#milestones"
+---
+
+# {card_title}
+
+## 🚀 交付版本节点
+{chr(10).join(rel_tags)}
+
+## 📦 交付范围与影响
+本次版本交付标志着当前周期核心需求的完整落地。
+"""
+            candidates.append({
+                "id": f"cand-{len(candidates) + 1}",
+                "title": card_title,
+                "domain": domain,
+                "target_path": target_path,
+                "summary": summary,
+                "tags": ["#projects/releases", "#milestones"],
+                "content": content,
+                "source_count": len(tags),
+                "synced": False,
+            })
+
+    if not candidates:
+        card_title = f"{period_label} 业务与工程实践总结"
+        domain = "BestPractices"
+        file_slug = _clean_slug(f"{period_label}-practices-summary")
+        target_path = f"40-Domain/{domain}/{file_slug}.md"
+        summary = f"收录 {period_label} 周期内完成的重点事项与技术实践。"
+        content = f"""---
+title: "{card_title}"
+domain: "{domain}"
+period: "{period_label}"
+tags:
+  - "#domain/bestpractices"
+  - "#knowledge-card"
+---
+
+# {card_title}
+
+## 🎯 周期重点完成事项
+- 知识库与工作流持续维护与治理。
+
+## 💡 实践沉淀
+- 保持定期复盘与知识沉淀闭环。
+- 强化代码规范与跨端适配。
+"""
+        candidates.append({
+            "id": "cand-1",
+            "title": card_title,
+            "domain": domain,
+            "target_path": target_path,
+            "summary": summary,
+            "tags": ["#domain/bestpractices", "#knowledge-card"],
+            "content": content,
+            "source_count": len(commits),
+            "synced": False,
+        })
+
+    return candidates
+
+
 @app.post("/mcp/vault_review")
 @app.post("/mcp/vault_weekly_review")
 async def weekly_review(req: ReviewRequest, request: Request):
@@ -791,6 +1051,8 @@ tags:
             config_data=cfg_data,
         )
 
+    reusable_knowledge = _extract_cloud_reusable_knowledge(week, commits, tags)
+
     return {
         "status": "success", "week": week, "path": path, "period_value": week,
         "author_scope": req.author_scope, "author_scope_label": scope_label,
@@ -800,6 +1062,45 @@ tags:
         "logged_tasks_count": 0, "total_hours": 0, "avg_focus": None,
         "completed_items": 0, "pending_items": 0, "compiled_items": 0,
         "notification_result": notification_result,
+        "reusable_knowledge": reusable_knowledge,
+    }
+
+
+@app.post("/api/review/sync-knowledge")
+@app.post("/mcp/vault_sync_knowledge")
+async def cloud_sync_knowledge(req: SyncKnowledgeRequest, request: Request):
+    env = _env(request)
+    synced = []
+    log_lines = []
+    for item in req.items:
+        path_str = str(item.path or item.target_path or "").strip()
+        content = str(item.content or "").strip()
+        title = str(item.title or PurePosixPath(path_str).stem).strip()
+        if not path_str or not content:
+            continue
+        clean_path = _normalize_path(path_str)
+        res = await _upsert_note(env, clean_path, content)
+        synced.append({
+            "title": title,
+            "path": clean_path,
+            "version": res.get("version"),
+            "status": "synced",
+        })
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        log_lines.append(f"- **复盘沉淀知识**: `[[{clean_path}]]` · 操作: 沉淀知识卡片 · 时间: {now_str}")
+
+    if log_lines:
+        log_path = "00-Meta/COMPILATION-LOG.md"
+        existing = await _note(env, log_path)
+        existing_log = existing["content"] if existing and existing.get("content") else "# 编译审计日志\n"
+        header = f"\n\n## [{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}] 复盘知识同步\n\n"
+        new_log = existing_log + header + "\n".join(log_lines) + "\n"
+        await _upsert_note(env, log_path, new_log)
+
+    return {
+        "status": "success",
+        "synced_count": len(synced),
+        "items": synced,
     }
 
 
