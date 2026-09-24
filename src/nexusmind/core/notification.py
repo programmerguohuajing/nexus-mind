@@ -13,6 +13,8 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from nexusmind.config import NOTIFICATION_CONFIG_PATH
 
+from typing import Any, Dict, List, Optional
+
 VALID_CHANNEL_TYPES = {"feishu", "dingtalk", "email", "webhook"}
 
 
@@ -38,6 +40,8 @@ def sanitize_channel_config(channel: Dict[str, Any]) -> Dict[str, Any]:
     sanitized = dict(channel)
     if "secret" in sanitized and sanitized["secret"]:
         sanitized["secret"] = "******"
+    if "app_secret" in sanitized and sanitized["app_secret"]:
+        sanitized["app_secret"] = "******"
     if "smtp_pass" in sanitized and sanitized["smtp_pass"]:
         sanitized["smtp_pass"] = "******"
     return sanitized
@@ -73,6 +77,10 @@ def save_notification_config(
         if secret == "******":
             secret = str(old_item.get("secret") or "")
 
+        app_secret = str(item.get("app_secret") or "").strip()
+        if app_secret == "******":
+            app_secret = str(old_item.get("app_secret") or "")
+
         smtp_pass = str(item.get("smtp_pass") or "").strip()
         if smtp_pass == "******":
             smtp_pass = str(old_item.get("smtp_pass") or "")
@@ -84,7 +92,37 @@ def save_notification_config(
             "enabled": bool(item.get("enabled", True)),
         }
 
-        if channel_type in {"feishu", "dingtalk", "webhook"}:
+        if channel_type == "feishu":
+            is_app_mode = (
+                item.get("feishu_mode") == "app"
+                or bool(item.get("app_id"))
+                or bool(item.get("receive_id"))
+            )
+            if is_app_mode:
+                app_id = str(item.get("app_id") or "").strip()
+                receive_id = str(item.get("receive_id") or "").strip()
+                receive_id_type = str(item.get("receive_id_type") or "open_id").strip()
+                if not app_id:
+                    raise ValueError(f"App ID (app_id) is required for Feishu App channel '{channel_name}'")
+                if not app_secret:
+                    raise ValueError(f"App Secret (app_secret) is required for Feishu App channel '{channel_name}'")
+                if not receive_id:
+                    raise ValueError(f"Receive ID (receive_id) is required for Feishu App channel '{channel_name}'")
+                channel_entry["feishu_mode"] = "app"
+                channel_entry["app_id"] = app_id
+                channel_entry["app_secret"] = app_secret
+                channel_entry["receive_id"] = receive_id
+                channel_entry["receive_id_type"] = receive_id_type
+            else:
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    raise ValueError(f"Webhook URL or App ID/Secret is required for Feishu channel '{channel_name}'")
+                channel_entry["feishu_mode"] = "webhook"
+                channel_entry["url"] = url
+                if secret:
+                    channel_entry["secret"] = secret
+
+        elif channel_type in {"dingtalk", "webhook"}:
             url = str(item.get("url") or "").strip()
             if not url:
                 raise ValueError(f"Webhook URL is required for channel '{channel_name}'")
@@ -192,14 +230,68 @@ def _http_post_json(
 
 
 def _send_feishu(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:
-    url = channel["url"]
-    secret = channel.get("secret")
-    timestamp = int(time.time())
-
     lines = [line for line in content.splitlines() if line.strip()]
     content_paragraphs = []
     for line in lines[:30]:  # Limit lines for card
         content_paragraphs.append([{"tag": "text", "text": line}])
+
+    is_app_mode = (
+        channel.get("feishu_mode") == "app"
+        or bool(channel.get("app_id"))
+        or bool(channel.get("receive_id"))
+    )
+
+    if is_app_mode:
+        app_id = str(channel.get("app_id") or "").strip()
+        app_secret = str(channel.get("app_secret") or "").strip()
+        receive_id = str(channel.get("receive_id") or "").strip()
+        receive_id_type = str(channel.get("receive_id_type") or "open_id").strip() or "open_id"
+
+        # Auto-infer receive_id_type if not explicitly set to a custom one
+        if receive_id_type == "open_id":
+            if receive_id.startswith("oc_"):
+                receive_id_type = "chat_id"
+            elif "@" in receive_id:
+                receive_id_type = "email"
+
+        token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        token_payload = {
+            "app_id": app_id,
+            "app_secret": app_secret,
+        }
+        status_code, res_data, res_text = _http_post_json(token_url, token_payload, timeout=10.0)
+        if status_code != 200 or res_data.get("code", -1) != 0:
+            err_msg = res_data.get("msg") or res_text or f"HTTP {status_code}"
+            return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": f"Feishu auth failed: {err_msg}"}
+
+        tenant_token = res_data.get("tenant_access_token")
+        if not tenant_token:
+            return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": "Feishu auth returned no tenant_access_token"}
+
+        send_url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
+        post_obj = {
+            "zh_cn": {
+                "title": f"📢 {title}",
+                "content": content_paragraphs,
+            }
+        }
+        send_payload = {
+            "receive_id": receive_id,
+            "msg_type": "post",
+            "content": json.dumps(post_obj, ensure_ascii=False),
+        }
+        send_headers = {"Authorization": f"Bearer {tenant_token}"}
+        send_status, send_data, send_text = _http_post_json(send_url, send_payload, headers=send_headers, timeout=10.0)
+        if send_status == 200 and send_data.get("code", -1) == 0:
+            return {"status": "success", "channel_id": channel.get("id"), "type": "feishu", "response": send_data}
+        else:
+            err_msg = send_data.get("msg") or send_text or f"HTTP {send_status}"
+            return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": f"Feishu send failed: {err_msg}"}
+
+    # Webhook mode
+    url = channel.get("url", "")
+    secret = channel.get("secret")
+    timestamp = int(time.time())
 
     payload: Dict[str, Any] = {
         "msg_type": "post",
@@ -219,10 +311,10 @@ def _send_feishu(channel: Dict[str, Any], title: str, content: str) -> Dict[str,
 
     status_code, res_data, res_text = _http_post_json(url, payload, timeout=10.0)
     if status_code == 200 and res_data.get("code", 0) == 0:
-        return {"status": "success", "channel_id": channel["id"], "type": "feishu", "response": res_data}
+        return {"status": "success", "channel_id": channel.get("id"), "type": "feishu", "response": res_data}
     else:
         err_msg = res_data.get("msg") or res_text or f"HTTP {status_code}"
-        return {"status": "error", "channel_id": channel["id"], "type": "feishu", "error": err_msg}
+        return {"status": "error", "channel_id": channel.get("id"), "type": "feishu", "error": err_msg}
 
 
 def _send_dingtalk(channel: Dict[str, Any], title: str, content: str) -> Dict[str, Any]:

@@ -118,6 +118,11 @@ class NotificationChannelModel(BaseModel):
     name: Optional[str] = None
     type: str
     enabled: bool = True
+    feishu_mode: Optional[str] = None
+    app_id: Optional[str] = None
+    app_secret: Optional[str] = None
+    receive_id: Optional[str] = None
+    receive_id_type: Optional[str] = "open_id"
     url: Optional[str] = None
     secret: Optional[str] = None
     smtp_host: Optional[str] = None

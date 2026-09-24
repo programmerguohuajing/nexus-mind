@@ -68,6 +68,11 @@ class NotificationChannelModel(BaseModel):
     name: str | None = None
     type: str
     enabled: bool = True
+    feishu_mode: str | None = None
+    app_id: str | None = None
+    app_secret: str | None = None
+    receive_id: str | None = None
+    receive_id_type: str | None = "open_id"
     url: str | None = None
     secret: str | None = None
     smtp_host: str | None = None
@@ -996,6 +1001,9 @@ async def cloud_update_notification_channels(req: NotificationConfigRequest, req
         secret = str(item.get("secret") or "").strip()
         if secret == "******":
             secret = str(old.get("secret") or "")
+        app_secret = str(item.get("app_secret") or "").strip()
+        if app_secret == "******":
+            app_secret = str(old.get("app_secret") or "")
         smtp_pass = str(item.get("smtp_pass") or "").strip()
         if smtp_pass == "******":
             smtp_pass = str(old.get("smtp_pass") or "")
@@ -1006,7 +1014,36 @@ async def cloud_update_notification_channels(req: NotificationConfigRequest, req
             "type": ctype,
             "enabled": bool(item.get("enabled", True)),
         }
-        if ctype in ("feishu", "dingtalk", "webhook"):
+        if ctype == "feishu":
+            is_app_mode = (
+                item.get("feishu_mode") == "app"
+                or bool(item.get("app_id"))
+                or bool(item.get("receive_id"))
+            )
+            if is_app_mode:
+                app_id = str(item.get("app_id") or "").strip()
+                receive_id = str(item.get("receive_id") or "").strip()
+                receive_id_type = str(item.get("receive_id_type") or "open_id").strip()
+                if not app_id:
+                    raise HTTPException(status_code=400, detail=f"App ID is required for Feishu App channel '{cname}'")
+                if not app_secret:
+                    raise HTTPException(status_code=400, detail=f"App Secret is required for Feishu App channel '{cname}'")
+                if not receive_id:
+                    raise HTTPException(status_code=400, detail=f"Receive ID is required for Feishu App channel '{cname}'")
+                entry["feishu_mode"] = "app"
+                entry["app_id"] = app_id
+                entry["app_secret"] = app_secret
+                entry["receive_id"] = receive_id
+                entry["receive_id_type"] = receive_id_type
+            else:
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    raise HTTPException(status_code=400, detail=f"Webhook URL or App ID/Secret is required for Feishu channel '{cname}'")
+                entry["feishu_mode"] = "webhook"
+                entry["url"] = url
+                if secret:
+                    entry["secret"] = secret
+        elif ctype in ("dingtalk", "webhook"):
             url = str(item.get("url") or "").strip()
             if not url:
                 raise HTTPException(status_code=400, detail=f"Webhook URL is required for channel '{cname}'")

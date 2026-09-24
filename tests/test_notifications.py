@@ -171,10 +171,76 @@ def test_notification_api_routes():
                 "type": "webhook",
                 "enabled": True,
                 "url": "https://example.com/hook",
-            }
+            },
+            {
+                "id": "feishu_app_channel",
+                "name": "飞书自建应用",
+                "type": "feishu",
+                "feishu_mode": "app",
+                "app_id": "cli_mock123",
+                "app_secret": "sec_mock456",
+                "receive_id": "ou_user789",
+                "receive_id_type": "open_id",
+                "enabled": True,
+            },
         ],
     }
 
     update_res = client.post("/api/notifications/channels", json=save_payload)
     assert update_res.status_code == 200
     assert update_res.json()["default_channel_id"] == "generic_hook"
+    channels = update_res.json()["channels"]
+    feishu_ch = next(c for c in channels if c["id"] == "feishu_app_channel")
+    assert feishu_ch["app_secret"] == "******"
+    assert feishu_ch["app_id"] == "cli_mock123"
+
+
+@patch("httpx.post")
+def test_send_notification_feishu_app_mode(mock_post, tmp_path: Path):
+    auth_resp = MagicMock()
+    auth_resp.status_code = 200
+    auth_resp.headers = {"content-type": "application/json"}
+    auth_resp.json.return_value = {"code": 0, "msg": "ok", "tenant_access_token": "t-app-token-123"}
+
+    msg_resp = MagicMock()
+    msg_resp.status_code = 200
+    msg_resp.headers = {"content-type": "application/json"}
+    msg_resp.json.return_value = {"code": 0, "msg": "success", "data": {"message_id": "om_test999"}}
+
+    mock_post.side_effect = [auth_resp, msg_resp]
+
+    config_file = tmp_path / "notification-config.json"
+    save_notification_config(
+        [
+            {
+                "id": "feishu_app_test",
+                "name": "飞书自建应用通知",
+                "type": "feishu",
+                "feishu_mode": "app",
+                "app_id": "cli_test_app",
+                "app_secret": "test_app_secret",
+                "receive_id": "oc_test_chat_id",
+                "receive_id_type": "chat_id",
+                "enabled": True,
+            }
+        ],
+        config_path=config_file,
+    )
+
+    res = send_notification("自建应用通知", "这是测试内容", channel_ids=["feishu_app_test"], config_path=config_file)
+    assert res["status"] == "success"
+    assert res["sent_count"] == 1
+    assert mock_post.call_count == 2
+
+    # Check token call
+    first_call_args, first_call_kwargs = mock_post.call_args_list[0]
+    assert "tenant_access_token/internal" in first_call_args[0]
+    assert first_call_kwargs["json"]["app_id"] == "cli_test_app"
+
+    # Check message call
+    second_call_args, second_call_kwargs = mock_post.call_args_list[1]
+    assert "open-apis/im/v1/messages" in second_call_args[0]
+    assert "Bearer t-app-token-123" in second_call_kwargs["headers"]["Authorization"]
+    assert second_call_kwargs["json"]["receive_id"] == "oc_test_chat_id"
+    assert "post" in second_call_kwargs["json"]["msg_type"]
+

@@ -1412,22 +1412,51 @@ async function runReview() {
 
 async function renderNotifications() {
   app.innerHTML = '<div class="grid two"><div class="card"><h3>已配置推送渠道</h3>'
-    + '<p class="muted">支持飞书、钉钉、邮件及通用 Webhook 通道，生成的复盘报告与提炼知识可自主选择推送。</p>'
+    + '<p class="muted">支持飞书（自建应用 / 机器人）、钉钉、邮件及通用 Webhook 通道，生成的复盘报告与提炼知识可自主选择推送。</p>'
     + '<div id="channelList" class="list" style="margin-top:12px"><div class="empty">正在读取渠道配置…</div></div></div>'
     + '<div class="card"><h3>添加 / 编辑渠道</h3>'
-    + '<div class="form-group"><label>渠道 ID</label><input id="channelId" class="input" placeholder="e.g. feishu_dev" /></div>'
-    + '<div class="form-group"><label>渠道名称</label><input id="channelName" class="input" placeholder="e.g. 飞书开发通知群" /></div>'
-    + '<div class="form-group"><label>渠道类型</label><select id="channelType" class="input" onchange="onChannelTypeChange()"><option value="feishu">飞书自定义机器人 (Feishu)</option><option value="dingtalk">钉钉自定义机器人 (DingTalk)</option><option value="email">邮件 SMTP (Email)</option><option value="webhook">通用 Webhook (Generic Webhook)</option></select></div>'
+    + '<div class="form-group"><label>渠道 ID</label><input id="channelId" class="input" placeholder="e.g. feishu_app 或 feishu_bot" /></div>'
+    + '<div class="form-group"><label>渠道名称</label><input id="channelName" class="input" placeholder="e.g. 飞书核心通知 / 飞书群机器人" /></div>'
+    + '<div class="form-group"><label>渠道类型</label><select id="channelType" class="input" onchange="onChannelTypeChange()"><option value="feishu">飞书 (Feishu - 自建应用 / Webhook)</option><option value="dingtalk">钉钉自定义机器人 (DingTalk)</option><option value="email">邮件 SMTP (Email)</option><option value="webhook">通用 Webhook (Generic Webhook)</option></select></div>'
     + '<div id="channelTypeFields"></div>'
     + '<div class="actions" style="margin-top:16px"><button class="btn" onclick="addOrUpdateChannel()">保存该渠道</button></div></div></div>';
   onChannelTypeChange();
   await loadNotificationChannels();
 }
 
+function onFeishuModeChange() {
+  const mode = document.getElementById("feishuMode")?.value || "app";
+  const container = document.getElementById("feishuModeFields");
+  if (!container) return;
+  if (mode === "app") {
+    container.innerHTML = '<div class="form-group"><label>App ID (应用唯一标识)</label><input id="feishuAppId" class="input" placeholder="cli_a1b2c3d4e5..." /></div>'
+      + '<div class="form-group"><label>App Secret (应用密钥)</label><input id="feishuAppSecret" class="input" type="password" placeholder="App Secret 密钥" /></div>'
+      + '<div class="form-group"><label>接收对象类型 (receive_id_type)</label>'
+      + '<select id="feishuReceiveIdType" class="input">'
+      + '<option value="open_id">用户 Open ID (ou_xxx)</option>'
+      + '<option value="chat_id">群聊 Chat ID (oc_xxx)</option>'
+      + '<option value="email">企业邮箱 (Email)</option>'
+      + '<option value="user_id">用户 User ID</option>'
+      + '</select></div>'
+      + '<div class="form-group"><label>接收人 / 群 ID (receive_id)</label><input id="feishuReceiveId" class="input" placeholder="例如: ou_xxxx 或 oc_xxxx 或 user@example.com" /></div>'
+      + '<p class="muted" style="font-size:12px;margin-top:4px;">💡 提示：需在飞书开放平台给自建应用开通“获取与发送单聊/群聊消息”权限 (im:message, im:message:send_as_bot)，并在群内添加该机器人应用或对用户发起单聊。</p>';
+  } else {
+    container.innerHTML = '<div class="form-group"><label>Webhook URL</label><input id="channelUrl" class="input" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." /></div>'
+      + '<div class="form-group"><label>Secret 密钥 (可选)</label><input id="channelSecret" class="input" type="password" placeholder="若机器人开启了加签请填入" /></div>';
+  }
+}
+
 function onChannelTypeChange() {
   const type = document.getElementById("channelType").value;
   const fieldsEl = document.getElementById("channelTypeFields");
-  if (type === "feishu" || type === "dingtalk" || type === "webhook") {
+  if (type === "feishu") {
+    fieldsEl.innerHTML = '<div class="form-group"><label>飞书接入模式</label>'
+      + '<select id="feishuMode" class="input" onchange="onFeishuModeChange()">'
+      + '<option value="app">自建应用 OpenAPI (App ID + App Secret)</option>'
+      + '<option value="webhook">群自定义机器人 Webhook</option></select></div>'
+      + '<div id="feishuModeFields"></div>';
+    onFeishuModeChange();
+  } else if (type === "dingtalk" || type === "webhook") {
     fieldsEl.innerHTML = '<div class="form-group"><label>Webhook URL</label><input id="channelUrl" class="input" placeholder="https://..." /></div>'
       + '<div class="form-group"><label>Secret 密钥 (可选)</label><input id="channelSecret" class="input" type="password" placeholder="若设置了加签密钥请填入" /></div>'
       + (type === "webhook" ? '<div class="form-group"><label>自定义 Header (JSON, 可选)</label><input id="channelHeaders" class="input" placeholder=\'{"Authorization": "Bearer xxx"}\' /></div>' : "");
@@ -1454,7 +1483,14 @@ async function loadNotificationChannels() {
     listEl.innerHTML = channels.map(function(c) {
       const typeBadge = '<span class="badge">' + esc(c.type.toUpperCase()) + '</span>';
       const statusBadge = c.enabled ? '<span class="badge ok">已启用</span>' : '<span class="badge warn">已禁用</span>';
-      const detail = c.type === "email" ? ("SMTP: " + esc(c.smtp_host) + " -> " + esc((c.recipients || []).join(", "))) : ("URL: " + esc(c.url));
+      let detail = "";
+      if (c.type === "email") {
+        detail = "SMTP: " + esc(c.smtp_host) + " -> " + esc((c.recipients || []).join(", "));
+      } else if (c.type === "feishu" && (c.feishu_mode === "app" || c.app_id)) {
+        detail = "Feishu App: " + esc(c.app_id) + " -> " + esc(c.receive_id_type || "open_id") + ":" + esc(c.receive_id);
+      } else {
+        detail = "URL: " + esc(c.url);
+      }
       return '<div class="list-item" style="display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid var(--border-color);">'
         + '<div><strong>' + esc(c.name) + '</strong> (' + esc(c.id) + ')'
         + '<div class="path" style="margin-top:4px;font-size:12px;">' + detail + '</div></div>'
@@ -1476,9 +1512,25 @@ async function addOrUpdateChannel() {
   const existing = state.notificationConfig?.channels || [];
   const newChannel = { id: id, name: name, type: type, enabled: true };
 
-  if (type === "feishu" || type === "dingtalk" || type === "webhook") {
+  if (type === "feishu") {
+    const mode = document.getElementById("feishuMode")?.value || "app";
+    newChannel.feishu_mode = mode;
+    if (mode === "app") {
+      newChannel.app_id = document.getElementById("feishuAppId")?.value.trim() || "";
+      newChannel.app_secret = document.getElementById("feishuAppSecret")?.value.trim() || "";
+      newChannel.receive_id = document.getElementById("feishuReceiveId")?.value.trim() || "";
+      newChannel.receive_id_type = document.getElementById("feishuReceiveIdType")?.value || "open_id";
+      if (!newChannel.app_id) return toast("请填入飞书 App ID", true);
+      if (!newChannel.receive_id) return toast("请填入接收人或群 ID", true);
+    } else {
+      newChannel.url = document.getElementById("channelUrl")?.value.trim() || "";
+      newChannel.secret = document.getElementById("channelSecret")?.value.trim() || "";
+      if (!newChannel.url) return toast("请填入飞书 Webhook URL", true);
+    }
+  } else if (type === "dingtalk" || type === "webhook") {
     newChannel.url = document.getElementById("channelUrl").value.trim();
     newChannel.secret = document.getElementById("channelSecret").value.trim();
+    if (!newChannel.url) return toast("请填入 Webhook URL", true);
     if (type === "webhook" && document.getElementById("channelHeaders").value.trim()) {
       try {
         newChannel.headers = JSON.parse(document.getElementById("channelHeaders").value.trim());
@@ -1490,6 +1542,8 @@ async function addOrUpdateChannel() {
     newChannel.smtp_user = document.getElementById("smtpUser").value.trim();
     newChannel.smtp_pass = document.getElementById("smtpPass").value.trim();
     const recipients = document.getElementById("emailRecipients").value.split(",").map(s => s.trim()).filter(Boolean);
+    if (!newChannel.smtp_host) return toast("请填入 SMTP 主机", true);
+    if (!recipients.length) return toast("请填入至少一个收件人邮箱", true);
     newChannel.recipients = recipients;
   }
 
