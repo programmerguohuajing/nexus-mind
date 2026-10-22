@@ -19,7 +19,12 @@ from nexusmind.core.notification import (
     sanitize_channel_config,
     send_notification,
 )
+from nexusmind.core.ask import ask_vault
+from nexusmind.core.embeddings import hybrid_search, semantic_search
+from nexusmind.core.narrative import generate_daily_narrative, push_daily_narrative
 from nexusmind.core.occ import get_file_hash
+from nexusmind.core.project_binding import project_context
+from nexusmind.core.smart import suggest_for_note
 from nexusmind.core.review import generate_review, generate_weekly_review
 from nexusmind.core.search import search_notes
 from nexusmind.core.storage import (
@@ -57,7 +62,7 @@ TOOLS_MANIFEST = [
     },
     {
         "name": "vault_search",
-        "description": "全文/正则检索，支持目录、标签、Frontmatter 属性过滤。",
+        "description": "全文/正则检索，支持目录、标签、Frontmatter 属性过滤；mode=semantic/hybrid 时走语义/混合检索。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -67,6 +72,52 @@ TOOLS_MANIFEST = [
                 "properties": {"type": "object"},
                 "regex": {"type": "boolean", "default": False},
                 "limit": {"type": "integer", "default": 50},
+                "mode": {"type": "string", "enum": ["keyword", "semantic", "hybrid"]},
+            },
+        },
+    },
+    {
+        "name": "vault_project_context",
+        "description": "按项目绑定（仓库根 .nexusmind.yaml 或 Vault 00-Meta/projects.yaml）返回当前项目作用域内的知识清单。Agent 在新项目开工时应先调用它建立上下文。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "当前开发仓库的本地路径（自动向上查找 .nexusmind.yaml）"},
+                "project": {"type": "string", "description": "项目名（走 Vault 侧映射时使用）"},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    },
+    {
+        "name": "vault_ask",
+        "description": "基于知识库回答问题：混合检索后综合作答并给出真实来源引用；知识库没有的内容会明确说明。开发新功能前可用它查既有经验与规范。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "limit": {"type": "integer", "default": 6},
+                "save": {"type": "boolean", "default": False},
+            },
+            "required": ["question"],
+        },
+    },
+    {
+        "name": "vault_suggestions",
+        "description": "为一篇笔记生成智能处理建议：摘要、标签推荐与待补链接（仅建议，不落盘）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "vault_daily_narrative",
+        "description": "把某天 Daily Log 的 Git 活动生成中文日报叙事，可选推送到通知渠道。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string"},
+                "push_channels": {"type": "array", "items": {"type": "string"}},
             },
         },
     },
@@ -200,6 +251,19 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "vault_patch":
         return patch_note(args["path"], args["content"], if_match=args.get("ifMatch"))
     if name == "vault_search":
+        mode = args.get("mode", "keyword")
+        if mode == "semantic":
+            return semantic_search(
+                args.get("query", ""),
+                folder=args.get("folder"),
+                limit=min(int(args.get("limit", 50)), 50),
+            )
+        if mode == "hybrid":
+            return hybrid_search(
+                args.get("query", ""),
+                folder=args.get("folder"),
+                limit=min(int(args.get("limit", 50)), 50),
+            )
         return search_notes(
             args.get("query", ""),
             folder=args.get("folder"),
@@ -208,6 +272,24 @@ def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             regex=args.get("regex", False),
             limit=args.get("limit", 50),
         )
+    if name == "vault_project_context":
+        return project_context(
+            project_path=args.get("project_path"),
+            project=args.get("project"),
+            limit=int(args.get("limit", 50)),
+        )
+    if name == "vault_ask":
+        return ask_vault(
+            args["question"],
+            limit=int(args.get("limit", 6)),
+            save=bool(args.get("save", False)),
+        )
+    if name == "vault_suggestions":
+        return suggest_for_note(args["path"])
+    if name == "vault_daily_narrative":
+        if args.get("push_channels") is not None:
+            return push_daily_narrative(args.get("date"), channels=args.get("push_channels"))
+        return generate_daily_narrative(args.get("date"))
     if name == "vault_list_unresolved":
         return find_broken_links()
     if name == "vault_find_orphans":

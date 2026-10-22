@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: -apple-system, "PingFang SC", sans-serif; width: 300px; margin: 0; padding: 14px; }
+    h1 { font-size: 15px; margin: 0 0 4px; }
+    p.hint { color: #667085; font-size: 12px; margin: 4px 0 10px; word-break: break-all; }
+    button { display: block; width: 100%; margin: 6px 0; padding: 9px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
+    button.secondary { background: #eef2ff; color: #274690; }
+    label { font-size: 13px; display: block; margin-top: 8px; }
+    input[type="text"] { width: 100%; padding: 6px; margin-top: 4px; border: 1px solid #d5dbe7; border-radius: 6px; }
+    #status { font-size: 12px; min-height: 16px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>📚 NexusMind 剪藏</h1>
+  <p class="hint" id="pageInfo">读取当前页面…</p>
+  <button id="clipPage">剪藏整页</button>
+  <button id="clipSelection" class="secondary">剪藏选中文本</button>
+  <button id="readLater" class="secondary">稍后读</button>
+  <label>标签（可选，逗号分隔）<input type="text" id="tags" placeholder="inbox, 技术" /></label>
+  <button id="syncLater" class="secondary">同步稍后读列表</button>
+  <p id="status"></p>
+  <script src="clipper.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

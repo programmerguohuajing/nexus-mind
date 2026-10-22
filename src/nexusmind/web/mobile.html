@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <title>NexusMind · 移动速记</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="/assets/nexusmind-agent.png" />
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1c2333; }
+    header { position: sticky; top: 0; background: #2563eb; color: #fff; padding: 14px 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+    header small { font-weight: 400; opacity: .85; }
+    main { padding: 14px; display: grid; gap: 18px; max-width: 640px; margin: 0 auto; }
+    section { background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 1px 4px rgba(16,24,40,.06); }
+    h2 { margin: 0 0 10px; font-size: 16px; }
+    textarea, input[type="text"] { width: 100%; border: 1px solid #d5dbe7; border-radius: 10px; padding: 10px; font-size: 16px; }
+    textarea { min-height: 110px; resize: vertical; }
+    button { background: #2563eb; color: #fff; border: 0; border-radius: 10px; padding: 10px 16px; font-size: 15px; margin-top: 10px; }
+    button.secondary { background: #eef2ff; color: #274690; }
+    .hint { color: #667085; font-size: 13px; margin-top: 8px; }
+    .result { border-top: 1px solid #eef1f6; padding: 8px 0; }
+    .result b { font-size: 15px; }
+    .result p { margin: 4px 0 0; color: #475467; font-size: 13px; }
+    #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: #101828; color: #fff; padding: 9px 14px; border-radius: 999px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+    #toast.show { opacity: 1; }
+    @media (prefers-color-scheme: dark) { body { background: #0b1220; color: #e6ebf5; } section { background: #131c2e; } textarea, input[type="text"] { background: #0f1728; color: #e6ebf5; border-color: #26334d; } }
+  </style>
+</head>
+<body>
+  <header><span>📚 NexusMind 速记</span><small id="netState">在线</small></header>
+  <main>
+    <section>
+      <h2>✍️ 快速记录</h2>
+      <textarea id="quickText" placeholder="想到什么先记下来，第一行会成为标题…"></textarea>
+      <div>
+        <button id="saveBtn">保存到知识库</button>
+        <button class="secondary" id="photoBtn">拍照入库（OCR）</button>
+        <input type="file" id="photoInput" accept="image/*" capture="environment" hidden />
+      </div>
+      <p class="hint" id="queueHint">离线时自动排队，联网后同步。</p>
+    </section>
+    <section>
+      <h2>🔍 查知识</h2>
+      <input type="text" id="searchInput" placeholder="输入关键词，例如：支付超时排查" />
+      <button id="searchBtn">搜索</button>
+      <div id="searchResults"></div>
+    </section>
+    <section>
+      <h2>🤖 问知识</h2>
+      <input type="text" id="askInput" placeholder="例如：Redis 超时一般怎么排查？" />
+      <button id="askBtn">提问</button>
+      <div id="askResult"></div>
+    </section>
+  </main>
+  <div id="toast"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const QUEUE_KEY = "nexusmind-offline-queue";
+    function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
+    function queue() { try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); } catch { return []; } }
+    function setQueue(q) { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); renderQueueHint(); }
+    function renderQueueHint() { const n = queue().length; $("queueHint").textContent = n ? `有 ${n} 条离线记录待同步，联网后自动上传。` : "离线时自动排队，联网后同步。"; }
+    async function ingestNote(text) {
+      const lines = text.split("\n");
+      const title = (lines[0] || "移动速记").slice(0, 60) || "移动速记";
+      const resp = await fetch("/mcp/vault_ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content: text, author: "Mobile PWA" }) });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.json();
+    }
+    async function flushQueue() {
+      const q = queue(); if (!q.length || !navigator.onLine) return;
+      const rest = [];
+      for (const item of q) { try { await ingestNote(item); } catch { rest.push(item); } }
+      setQueue(rest); if (q.length !== rest.length) toast("离线记录已同步");
+    }
+    $("saveBtn").addEventListener("click", async () => {
+      const text = $("quickText").value.trim(); if (!text) { toast("先写点内容"); return; }
+      if (!navigator.onLine) { const q = queue(); q.push(text); setQueue(q); $("quickText").value = ""; toast("已离线保存，联网后同步"); return; }
+      try { await ingestNote(text); $("quickText").value = ""; toast("已保存到知识库"); } catch { const q = queue(); q.push(text); setQueue(q); toast("服务不可达，已加入待同步队列"); }
+    });
+    $("photoBtn").addEventListener("click", () => $("photoInput").click());
+    $("photoInput").addEventListener("change", async (ev) => {
+      const file = ev.target.files[0]; if (!file) return;
+      const form = new FormData(); form.append("files", file); form.append("author", "Mobile PWA");
+      try { const resp = await fetch("/api/uploads", { method: "POST", body: form }); const data = await resp.json(); toast(data.succeeded ? "照片已 OCR 入库" : "照片入库失败"); }
+      catch { toast("照片上传失败，请检查网络"); }
+      ev.target.value = "";
+    });
+    $("searchBtn").addEventListener("click", async () => {
+      const q = $("searchInput").value.trim(); if (!q) return;
+      const box = $("searchResults"); box.innerHTML = "<p class='hint'>搜索中…</p>";
+      try {
+        const resp = await fetch("/mcp/vault_search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: q, limit: 10 }) });
+        const data = await resp.json();
+        box.innerHTML = (data.matches || []).map(m => `<div class="result"><b>${m.title}</b><p>${m.path}</p><p>${(m.snippet || "").slice(0, 120)}</p></div>`).join("") || "<p class='hint'>没有找到相关知识。</p>";
+      } catch { box.innerHTML = "<p class='hint'>搜索失败（离线或服务不可达）。</p>"; }
+    });
+    $("askBtn").addEventListener("click", async () => {
+      const q = $("askInput").value.trim(); if (!q) return;
+      const box = $("askResult"); box.innerHTML = "<p class='hint'>思考中…</p>";
+      try {
+        const resp = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) });
+        const data = await resp.json();
+        const cites = (data.citations || []).map(c => `<p>📎 ${c.path}</p>`).join("");
+        box.innerHTML = `<div class="result"><p style="white-space:pre-wrap;color:inherit;font-size:14px">${data.answer || ""}</p>${cites}</div>`;
+      } catch { box.innerHTML = "<p class='hint'>问答失败（离线或服务不可达）。</p>"; }
+    });
+    function netRender() { $("netState").textContent = navigator.onLine ? "在线" : "离线"; if (navigator.onLine) flushQueue(); }
+    window.addEventListener("online", netRender); window.addEventListener("offline", netRender);
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    renderQueueHint(); netRender();
+  </script>
+</body>
+</html>
