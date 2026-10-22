@@ -13,6 +13,11 @@
 - **知识编译**：Raw 资料增量编译为可复用的 Domain 知识卡片。
 - **知识搜索**：全文搜索、Wikilink、Backlinks、知识图谱与 Canvas 浏览。
 - **治理能力**：死链、孤岛、索引与 OCC 并发保护。
+- **随手采集（v0.4.0）**：图片/截图 OCR（Tesseract）、扫描版 PDF OCR、浏览器网页剪藏扩展、移动端 PWA（速记/搜索/拍照入库）。
+- **版本历史与卫生（v0.4.0）**：每次覆盖写入自动留可回滚快照；SimHash 重复检测与合并重定向；Domain 卡片保鲜复核期限。
+- **AI 层·本地优先（v0.4.0）**：本地向量嵌入与关键词/语义/混合三路检索、带引用校验的 Ask My Vault 问答、入库智能建议、Daily Log 叙事生成。无模型时用内置嵌入器 + 抽取式回答完整降级运行；配置 Ollama 或 OpenAI 兼容模型后回答质量升级。
+- **Agent 连接（v0.4.0）**：`.nexusmind.yaml` 项目绑定 + `vault_project_context`，编码 Agent 开发时按项目作用域拉取相关知识。
+- **协作与生态（v0.4.0）**：GitHub/GitLab 连接器、笔记评论与 @提及、限时分享链接、团队空间、HTTP 远程 MCP（`POST /mcp-rpc`，全权/只读双 Token）、OKR 目标、RSS/邮件订阅入库、数据看板、VS Code 插件。
 ## 仓库与本地数据边界
 
 公开仓库只保存**可运行的项目代码和产品文档**。以下内容默认不会提交：
@@ -245,7 +250,11 @@ Windows 下请把 `NEXUSMIND_VAULT_ROOT` 改成 Windows 路径，例如 `D:\\Kno
 
 - `vault_read`：读取笔记正文、版本、Frontmatter、标签、正反向链接。
 - `vault_patch`：通过 OCC `ifMatch` 创建或更新允许写入的笔记。
-- `vault_search`：按全文/正则、目录、标签和 Frontmatter 属性搜索。
+- `vault_search`：按全文/正则、目录、标签和 Frontmatter 属性搜索；`mode` 支持 `keyword`、`semantic`、`hybrid` 三种模式。
+- `vault_ask`：向知识库提问，返回带引用校验的答案（配置模型时走 LLM，否则抽取式降级）。
+- `vault_project_context`：解析代码项目的 `.nexusmind.yaml` 绑定，列出作用域内的知识清单。
+- `vault_suggestions`：为笔记生成摘要、标签与补链建议（确认后才应用）。
+- `vault_daily_narrative`：把某日 Git 活动 Daily Log 转成可读的工作叙事。
 - `vault_list_unresolved`：检查未解析 Wikilink / 死链。
 - `vault_find_orphans`：检查没有传入反链的孤岛笔记。
 - `vault_compile`：把 Raw 来源编译成 Domain 正式知识卡片。
@@ -259,6 +268,7 @@ Windows 下请把 `NEXUSMIND_VAULT_ROOT` 改成 Windows 路径，例如 `D:\\Kno
 ### 不同部署模式下的边界
 
 - **Local / Local Agent**：完整支持 stdio MCP，也是推荐的 MCP 使用方式。
+- **远程 MCP（局域网 / 团队）**：本地服务同时提供 `POST /mcp-rpc`（HTTP JSON-RPC），复用同一套工具分发。API Token 为全权访问；单独的 `NEXUSMIND_MCP_READONLY_TOKEN` 只开放只读工具子集。
 - **Docker**：可以在容器内运行 MCP，但 MCP 客户端需要以 stdio 方式启动容器命令，并把 Vault 挂载到容器中。
 - **Cloudflare Workers**：当前 Worker 提供了 `/mcp/*` HTTP 知识接口，但它们**不是远程 MCP Transport**；标准 stdio MCP Server 仍属于 Local Agent 能力。
 ## 本地 Agent 桌面程序

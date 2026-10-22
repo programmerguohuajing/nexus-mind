@@ -254,3 +254,39 @@ NexusMind Web C 端支持界面语言和主题即时切换。当前语言支持 
 ### 在线链接入库
 
 在 **资料入库 → 在线链接** 中输入 HTTP/HTTPS 网页地址，NexusMind 会抓取网页、识别标题、过滤脚本/样式/导航等非正文内容，提取主要文本并写入 `60-References/Articles` Raw 层。本地 NexusMind Agent / 本地 API 支持 `localhost`、`127.0.0.1`、局域网 IP 和 `.local` 地址；NexusMind Cloud API 仅直接抓取公网网页。两种模式都会限制网页体积与重定向次数。
+
+
+## 14. v0.4.0 功能指南
+
+### OCR 入库、网页剪藏与移动端 PWA
+
+上传支持 PNG/JPG/WebP 图片与扫描版 PDF：文本由本地 Tesseract 提取（需安装 `nexusmind[ocr]` 与 `tesseract` 程序），图片引用、OCR 引擎与置信度写入 frontmatter，低置信度结果会标记待复核。`extensions/web-clipper/` 浏览器扩展可把整页或选中内容剪藏进 Raw 层，并保留本地稍后读列表。手机打开 `/m` 即移动端 PWA：速记、搜索、问答与拍照 OCR，离线时先入本地队列、服务可达后自动同步。设置 `NEXUSMIND_API_TOKEN` 后，非本机来源的 API 访问必须携带 Token。
+
+### 版本历史、重复检测与知识保鲜
+
+所有经统一写入口的覆盖写入都会先把旧内容快照到 `vault/.history/`；可在管理台或通过 `GET /api/history`、`POST /api/history/rollback` 查看与回滚。治理新增重复检测（SimHash + 词元重叠）：合并保留内容更丰富的一篇，另一篇转为重定向占位。Domain 卡片带 `review_after` 保鲜期限（默认 180 天），保鲜摘要列出逾期卡片，让知识被定期复核而不是悄悄腐烂。
+
+### AI 层：语义检索与问答
+
+搜索支持 `mode=keyword|semantic|hybrid`。内置本地嵌入器无需下载模型；设置 `NEXUSMIND_EMBED_PROVIDER=ollama|openai` 可切换神经嵌入。LLM 网关由 `NEXUSMIND_LLM_PROVIDER=auto|ollama|openai|off` 控制（另有 `NEXUSMIND_LLM_BASE_URL`、`NEXUSMIND_LLM_API_KEY`、`NEXUSMIND_LLM_MODEL`）。Ask My Vault 先检索证据，无相关内容时明确拒答，每条引用都与检索集合校验；未配置模型时降级为从笔记原文摘录的抽取式回答。新入库资料会生成摘要、标签与补链建议，确认后才应用；Daily Log 可通过 `vault_daily_narrative` 生成可读的工作叙事。
+
+### Agent 连接与项目绑定
+
+在代码项目根目录放一个 `.nexusmind.yaml`：
+
+```yaml
+project: my-app
+scope:
+  folders: ["40-Domain"]
+  tags: ["#payments"]
+```
+
+任意 MCP 客户端即可用项目路径调用 `vault_project_context`（或 `GET /api/project/context`），在写代码前拿到作用域内的知识清单与查询指引。库侧默认绑定放在 `00-Meta/projects.yaml`。`extensions/vscode/` 的 VS Code 插件把同一连接带进编辑器：当前文件的相关卡片、选中堆栈一键记排查笔记、问答。
+
+### 连接器、协作与远程 MCP
+
+在管理台配置 GitHub/GitLab 连接器（Token 在 API 响应中脱敏、绝不回显）：已合并的 PR/MR 与已关闭 Issue 同步进 `60-References/CodePlatform`，评审评论中带知识标记的内容会成为知识候选。笔记支持评论与 @提及、限时分享链接（可选密码保护，`/api/share/<token>`）、公开/成员/私有三档可见性的团队空间。远程 Agent 通过 `POST /mcp-rpc` 连接：API Token 为全权，`NEXUSMIND_MCP_READONLY_TOKEN` 只开放只读工具。
+
+### 目标、订阅管道与数据看板
+
+OKR 目标在管理台维护：关键结果可手动填报，也可自动折算（按目录的 `notes_count`、按仓库的 `releases`），并可为每个目标生成可直接贴进复盘的 Markdown 段落。RSS/Atom 订阅与 IMAP 邮箱按去重状态轮询入库到 Raw 层，让订阅变成知识而不是收件箱噪音。数据看板展示周增长、被引用最多的笔记、标签云、搜索未命中（知识库答不上来的问题）以及死链/孤岛/过期/重复的健康汇总。

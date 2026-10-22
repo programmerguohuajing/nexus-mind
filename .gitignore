@@ -30,6 +30,14 @@ vault/
 docs/
 workflow-config.json
 notification-config.json
+connectors-config.json
+feeds-config.json
+feeds-state.json
+goals.json
+
+# Node (browser/vscode extensions)
+node_modules/
+extensions/vscode/out/
 
 # Local runtime/config
 .env

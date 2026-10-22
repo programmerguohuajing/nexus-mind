@@ -254,3 +254,39 @@ A weekly review is not a Git log viewer. Git commits are used only as evidence. 
 ### Import from an online URL
 
 Under **Import → Online URL**, enter an HTTP/HTTPS page. NexusMind fetches the page, detects its title, removes scripts/styles/navigation and other non-content elements, extracts the main text, and stores it in the `60-References/Articles` Raw layer. Local NexusMind Agent / local API mode supports `localhost`, `127.0.0.1`, LAN IPs, and `.local` addresses; NexusMind Cloud API directly fetches public web pages only. Both modes enforce page-size and redirect limits.
+
+
+## 14. v0.4.0 Feature Guide
+
+### OCR capture, web clipper, and mobile PWA
+
+Uploads accept PNG/JPG/WebP images and scanned PDFs: text is extracted locally with Tesseract (install `nexusmind[ocr]` plus the `tesseract` binary) and stored with the image reference, OCR engine, and confidence in frontmatter; low-confidence results are flagged for review. The browser extension in `extensions/web-clipper/` clips full pages or selections into the Raw layer and keeps a local read-later list. Open `/m` on a phone for the mobile PWA: quick notes, search, Ask, and photo OCR, with an offline queue that syncs when the service is reachable. Set `NEXUSMIND_API_TOKEN` to require a token for non-loopback API access.
+
+### Version history, duplicates, and freshness review
+
+Every overwrite through the unified write path first snapshots the previous content under `vault/.history/`; list versions and roll back from the console or via `GET /api/history` and `POST /api/history/rollback`. Governance gains duplicate detection (SimHash + token overlap): merging keeps the richer note and turns the other into a redirect stub. Domain cards carry a `review_after` deadline (default 180 days); the freshness digest lists overdue cards so knowledge gets re-verified instead of silently rotting.
+
+### AI layer: semantic search and Ask My Vault
+
+Search accepts `mode=keyword|semantic|hybrid`. The built-in local embedder needs no model download; set `NEXUSMIND_EMBED_PROVIDER=ollama|openai` for neural embeddings. The LLM gateway is controlled by `NEXUSMIND_LLM_PROVIDER=auto|ollama|openai|off` (plus `NEXUSMIND_LLM_BASE_URL`, `NEXUSMIND_LLM_API_KEY`, `NEXUSMIND_LLM_MODEL`). Ask My Vault retrieves evidence first, declines to answer when nothing is relevant, and validates every citation against the retrieved set; with no model configured it falls back to extractive answers quoted from your notes. New ingests receive summary, tag, and link suggestions that are applied only after confirmation, and Daily Logs can be rendered as a readable work narrative via `vault_daily_narrative`.
+
+### Agent connection and project binding
+
+Add a `.nexusmind.yaml` at a code project's root:
+
+```yaml
+project: my-app
+scope:
+  folders: ["40-Domain"]
+  tags: ["#payments"]
+```
+
+Any MCP client can then call `vault_project_context` with the project path (or `GET /api/project/context`) to receive the scoped knowledge list and querying guidance before writing code. Vault-side defaults live in `00-Meta/projects.yaml`. The VS Code extension in `extensions/vscode/` surfaces the same connection in the editor: related cards for the current file, one-click incident notes from a selected stack trace, and Ask.
+
+### Connectors, collaboration, and remote MCP
+
+Configure GitHub/GitLab connectors in the console (tokens are masked in API responses and never echoed back): merged PRs/MRs and closed issues sync into `60-References/CodePlatform`, and review comments carrying knowledge markers become knowledge candidates. Notes support comments with @mentions, expiring share links (optionally password-protected) under `/api/share/<token>`, and team spaces with public/members/private visibility. Remote agents connect through `POST /mcp-rpc`: the API token grants full access, while `NEXUSMIND_MCP_READONLY_TOKEN` exposes only the read tools.
+
+### Goals, feeds, and analytics
+
+OKR goals live in the console: key results are manual or auto-measured (`notes_count` for a folder, `releases` for a repository), and a review-ready Markdown section can be generated per objective. RSS/Atom feeds and IMAP mailboxes poll into the Raw layer with dedupe state, so subscriptions become knowledge instead of inbox noise. The analytics view shows weekly growth, most-referenced notes, the tag cloud, search misses (questions your vault could not answer), and a health summary across broken links, orphans, stale cards, and duplicates.

@@ -15,6 +15,11 @@ NexusMind turns real engineering activity into reusable local knowledge.
 - **Knowledge compilation**: source material is incrementally compiled into reusable Domain notes.
 - **Knowledge navigation**: search, Wikilinks, backlinks, graph visualization, and Canvas browsing.
 - **Governance**: broken links, orphan notes, indexes, and optimistic concurrency control.
+- **Capture anywhere (v0.4.0)**: image and screenshot OCR (Tesseract), scanned-PDF OCR, a browser web-clipper extension, and a mobile PWA for quick notes, search, and photo capture.
+- **Version history & hygiene (v0.4.0)**: every overwrite keeps a restorable snapshot; duplicate detection (SimHash) with merge-to-redirect, and freshness review deadlines for Domain cards.
+- **AI layer, local-first (v0.4.0)**: local embeddings with keyword/semantic/hybrid search, Ask My Vault with validated citations, smart ingest suggestions, and Daily Log narratives. Works fully offline with the built-in embedder and extractive answers; an Ollama or OpenAI-compatible model upgrades answer quality when configured.
+- **Agent connection (v0.4.0)**: a `.nexusmind.yaml` project binding plus `vault_project_context` lets coding agents pull project-scoped knowledge while developing.
+- **Collaboration & ecosystem (v0.4.0)**: GitHub/GitLab connectors, note comments with @mentions, expiring share links, team spaces, remote MCP over HTTP (`POST /mcp-rpc`, full/readonly token scopes), OKR goals, RSS/email ingest, an analytics dashboard, and a VS Code extension.
 
 ## Repository vs. Local Data
 
@@ -247,7 +252,11 @@ The current stdio server exposes these tools:
 
 - `vault_read`: read note content, version, frontmatter, tags, links, and backlinks.
 - `vault_patch`: create/update writable notes with OCC `ifMatch` protection.
-- `vault_search`: search by text/regex, folder, tags, and frontmatter properties.
+- `vault_search`: search by text/regex, folder, tags, and frontmatter properties; `mode` supports `keyword`, `semantic`, and `hybrid`.
+- `vault_ask`: ask the vault a question and get an answer with validated citations (LLM when configured, extractive fallback otherwise).
+- `vault_project_context`: resolve a code project's `.nexusmind.yaml` binding and list the knowledge in its scope.
+- `vault_suggestions`: summary, tag, and link suggestions for a note (applied only on confirmation).
+- `vault_daily_narrative`: turn a day's Git-activity Daily Log into a readable work narrative.
 - `vault_list_unresolved`: list unresolved Wikilinks / broken links.
 - `vault_find_orphans`: list notes without incoming links.
 - `vault_compile`: compile Raw sources into a Domain knowledge card.
@@ -261,6 +270,7 @@ The current stdio server exposes these tools:
 ### Deployment boundaries
 
 - **Local / Local Agent**: full stdio MCP support. This is the recommended MCP mode.
+- **Remote MCP (LAN / team)**: the local service also exposes `POST /mcp-rpc` (JSON-RPC over HTTP) reusing the same tool dispatch. The API token grants full access; a separate `NEXUSMIND_MCP_READONLY_TOKEN` grants the read-only tool subset.
 - **Docker**: MCP can run inside the container, but the MCP client must launch the container command with stdio attached and the Vault must be mounted into the container.
 - **Cloudflare Workers**: the current Worker exposes HTTP knowledge endpoints under `/mcp/*`, but it is **not** a remote MCP transport endpoint. The standard MCP stdio server remains a Local Agent capability.
 ## Local Agent Desktop App
