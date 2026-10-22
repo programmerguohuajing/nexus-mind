@@ -11,7 +11,7 @@ import httpx
 
 STATE_VERSION = 1
 MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024
-IGNORED_TOP_LEVEL = {".obsidian", ".git", ".nexusmind", "__pycache__"}
+IGNORED_TOP_LEVEL = {".obsidian", ".git", ".nexusmind", ".history", "__pycache__"}
 
 
 def _sha256(content: str) -> str:

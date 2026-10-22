@@ -2,4 +2,4 @@
 NexusMind (知枢): Self-Growing Knowledge Operating System based on Agent + Obsidian
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

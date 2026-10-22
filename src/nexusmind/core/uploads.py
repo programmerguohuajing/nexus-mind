@@ -11,8 +11,10 @@ from pypdf import PdfReader
 
 from nexusmind.config import VAULT_ROOT
 from nexusmind.core.compiler import patch_note
+from nexusmind.core.ocr import ocr_image_bytes, ocr_pdf_bytes, pdf_needs_ocr
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf", ".docx"}
+SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_UPLOAD_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def _safe_name(filename: str) -> str:
@@ -60,16 +62,47 @@ def _extract_docx(data: bytes) -> str:
     return "\n\n".join(blocks)
 
 
-def _extract_text(filename: str, data: bytes) -> Tuple[str, str]:
+def _extract_text(filename: str, data: bytes) -> Tuple[str, str, Dict[str, Any]]:
+    """提取可编译文本；图片/扫描 PDF 走 OCR，引擎缺失时返回占位说明与 pending 标记。"""
     ext = Path(filename).suffix.lower()
     if ext == ".md":
-        return data.decode("utf-8-sig", errors="replace"), "markdown"
+        return data.decode("utf-8-sig", errors="replace"), "markdown", {}
     if ext == ".txt":
-        return data.decode("utf-8-sig", errors="replace"), "text"
-    if ext == ".pdf":
-        return _extract_pdf(data), "pdf"
+        return data.decode("utf-8-sig", errors="replace"), "text", {}
     if ext == ".docx":
-        return _extract_docx(data), "docx"
+        return _extract_docx(data), "docx", {}
+    if ext == ".pdf":
+        text = _extract_pdf(data)
+        if not pdf_needs_ocr(data):
+            return text, "pdf", {}
+        # 扫描版 PDF：尝试 OCR，失败则保留原占位并标注 ocr: needed。
+        try:
+            result = ocr_pdf_bytes(data)
+        except RuntimeError as exc:
+            return text, "pdf", {"ocr": "needed", "ocr_note": str(exc)}
+        meta: Dict[str, Any] = {"ocr": True, "ocr_engine": result["engine"]}
+        if result.get("confidence") is not None:
+            meta["ocr_confidence"] = result["confidence"]
+        body = result["text"]
+        if result.get("low_confidence"):
+            body += "\n\n> ⚠️ OCR 平均置信度较低，请对识别结果人工校对。"
+        return body, "pdf", meta
+    if ext in IMAGE_UPLOAD_EXTENSIONS:
+        try:
+            result = ocr_image_bytes(data, ext)
+        except RuntimeError as exc:
+            placeholder = (
+                "[图片原件已保存，但 OCR 引擎当前不可用，未能提取文字]\n\n"
+                f"安装指引：{exc}"
+            )
+            return placeholder, "image", {"ocr": "pending"}
+        meta = {"ocr": True, "ocr_engine": result["engine"]}
+        if result.get("confidence") is not None:
+            meta["ocr_confidence"] = result["confidence"]
+        body = result["text"] or "[未识别到文字]"
+        if result.get("low_confidence"):
+            body += "\n\n> ⚠️ OCR 平均置信度较低，请对识别结果人工校对。"
+        return body, "image", meta
     raise ValueError(f"Unsupported file type: {ext or '[none]'}")
 def ingest_uploaded_file(
     filename: str,
@@ -83,7 +116,7 @@ def ingest_uploaded_file(
     safe_name = _safe_name(filename)
     ext = Path(safe_name).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
-        raise ValueError("Supported file types: .md, .txt, .pdf, .docx")
+        raise ValueError("Supported file types: .md, .txt, .pdf, .docx, .png, .jpg, .jpeg, .webp")
     if not data:
         raise ValueError("Uploaded file is empty")
 
@@ -92,7 +125,7 @@ def ingest_uploaded_file(
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     raw_path.write_bytes(data)
 
-    extracted, kind = _extract_text(safe_name, data)
+    extracted, kind, ocr_meta = _extract_text(safe_name, data)
     title = Path(safe_name).stem
     note_filename = title + ".md"
     note_rel = _unique_rel_path("60-References/Articles", note_filename, vault_root)
@@ -100,6 +133,14 @@ def ingest_uploaded_file(
     source_link = raw_rel.replace("\\", "/")
     clean_author = (author or "Unknown").replace('"', "'")
     clean_url = (source_url or "").replace('"', "'")
+    extra_fm = ""
+    for key, value in ocr_meta.items():
+        if isinstance(value, bool):
+            extra_fm += f"{key}: {str(value).lower()}\n"
+        elif isinstance(value, (int, float)):
+            extra_fm += f"{key}: {value}\n"
+        else:
+            extra_fm += f'{key}: "{str(value).replace(chr(34), chr(39))}"\n'
     markdown = f"""---
 title: "{title.replace('"', "'")}"
 author: "{clean_author}"
@@ -107,7 +148,7 @@ url: "{clean_url}"
 ingested_at: "{timestamp}"
 source_file: "{source_link}"
 source_type: "{kind}"
-tags:
+{extra_fm}tags:
   - "#raw-reference"
   - "#uploaded"
 ---
@@ -134,6 +175,7 @@ tags:
         "version": result["version"],
         "source_type": kind,
         "bytes": len(data),
+        "ocr": ocr_meta or None,
     }
 
 

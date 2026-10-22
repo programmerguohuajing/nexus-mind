@@ -26,9 +26,19 @@ def patch_note(
     file_path = resolve_vault_path(rel_path, vault_root=vault_root)
     exists = file_path.exists()
     current_version = None
+    old_content: Optional[str] = None
     if exists:
-        current_version = get_file_hash(file_path.read_text(encoding="utf-8"))
+        old_content = file_path.read_text(encoding="utf-8")
+        current_version = get_file_hash(old_content)
     verify_occ(current_version, if_match, exists=exists)
+    # 覆盖前快照旧版本（版本历史）；快照失败不阻断正常写入。
+    if exists and old_content is not None and get_file_hash(content) != current_version:
+        try:
+            from nexusmind.core.history import snapshot_note
+
+            snapshot_note(rel_path, old_content, vault_root=vault_root)
+        except Exception:
+            pass
     file_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
     tmp_path.write_text(content, encoding="utf-8")
